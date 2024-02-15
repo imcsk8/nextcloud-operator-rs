@@ -7,7 +7,7 @@ use kube::ResourceExt;
 use kube::{client::Client, runtime::controller::Action, runtime::Controller, Api};
 use tokio::time::Duration;
 
-use crate::crd::Nextcloud;
+use crate::crd::{Nextcloud, create_crd};
 
 pub mod crd;
 mod nextcloud;
@@ -20,6 +20,11 @@ async fn main() {
     let kubernetes_client: Client = Client::try_default()
         .await
         .expect("Expected a valid KUBECONFIG environment variable.");
+
+
+    println!("---- Before creating crd ---");
+    create_crd(kubernetes_client.clone()).await;
+    println!("---- After creating crd ---");
 
     // Preparation of resources used by the `kube_runtime::Controller`
     let crd_api: Api<Nextcloud> = Api::all(kubernetes_client.clone());
@@ -104,7 +109,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // Apply the finalizer first. If that fails, the `?` operator invokes automatic conversion
             // of `kube::Error` to the `Error` defined in this crate.
             finalizer::add(client.clone(), &name, &namespace).await?;
-            // Invoke creation of a Kubernetes built-in resource named deployment with `n` echo service pods.
+            // Invoke creation of a Kubernetes built-in resource named deployment with `n` nextcloud service pods.
             println!("Creating php-fpm endpoint");
             nextcloud::deploy(client, &name, nextcloud.spec.replicas, &namespace).await?;
             Ok(Action::requeue(Duration::from_secs(10)))
@@ -135,6 +140,8 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
 ///
 /// # Arguments
 /// - `echo`: A reference to `Nextcloud` being reconciled to decide next action upon.
+/// TODO: check for more resource status
+/// meta() -> https://docs.rs/kube/0.88.1/kube/core/struct.ObjectMeta.html
 fn determine_action(nextcloud: &Nextcloud) -> NextcloudAction {
     return if nextcloud.meta().deletion_timestamp.is_some() {
         NextcloudAction::Delete
