@@ -41,10 +41,10 @@ pub async fn deploy(
             template: PodTemplateSpec {
                 spec: Some(PodSpec {
                     containers: vec![Container {
-                        name: name.to_owned(),
-                        image: Some("imcsk8/echo-server:latest".to_owned()),
+                        name: format!("php-fpm-{}",name).to_owned(),
+                        image: Some("localhost/nextcloud-php-fpm:latest".to_owned()),
                         ports: Some(vec![ContainerPort {
-                            container_port: 8080,
+                            container_port: 9000,
                             ..ContainerPort::default()
                         }]),
                         ..Container::default()
