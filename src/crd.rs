@@ -2,6 +2,7 @@ use kube::{CustomResource, CustomResourceExt, client::Client, Api, api::PatchPar
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use log::{info, debug};
 //use kube::{client::Client, runtime::controller::Action, runtime::Controller, Api};
 
 pub const RESOURCE_NAME: &str = "nextclouds.sotolitolabs.com";
@@ -25,15 +26,16 @@ pub struct NextcloudSpec {
 
 /// Creates the Nextcloud CRD
 /// This helps to avoid the manual creation of the Nextcloud CRD
+/// TODO: return proper values
 pub async fn create_crd(client: Client) {
     //let nextclouds = Api::default_namespaced(client.clone());
     let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
-    println!("Creating Nextcloud CRD");
+    info!("Creating Nextcloud CRD");
     match crds.patch(RESOURCE_NAME,
         &PatchParams::apply("imcsk8-test"),
         &Patch::Apply(Nextcloud::crd())
     ).await {
-        Ok(r) => println!("{} CRD created {:?}", RESOURCE_NAME, r),
-        Err(e) => println!("Error creating {} CRD {:?}!", RESOURCE_NAME, e),
+        Ok(r) => info!("{} CRD created {:?}", RESOURCE_NAME, r),
+        Err(e) => info!("Error creating {} CRD {:?}!", RESOURCE_NAME, e),
     };
 }
