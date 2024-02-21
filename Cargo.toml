@@ -1,7 +1,7 @@
 [package]
-name = "operator"
+name = "nextcloud"
 version = "0.1.0"
-authors = ["Pavel Pscheidl <pavel2@pscheidl.cz>"]
+authors = ["Iván Chavero <ichavero@chavero.com.mx>"]
 edition = "2021"
 
 [dependencies]
@@ -17,6 +17,10 @@ k8s-openapi = { version = "0.21", default-features = false, features = [
     "v1_26",
 ] } # Kube-rs depends on k8s-openapi
 futures = "0.3"
+log = "0.4.20"     # A lightweight logging facade for Rust
+#env_logger = "0.11.2"             # A logging implementation for `log` which is configured via an environment variable.
+pretty_env_logger = "0.5.0"
+
 # All serde dependencies are used to serialize/deserialize CRDs and other Kubernetes-related structs
 serde = "1"
 serde_json = "1.0"
