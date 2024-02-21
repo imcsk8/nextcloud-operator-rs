@@ -4,6 +4,9 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{DeleteParams, ObjectMeta, PostParams};
 use kube::{Api, Client, Error};
 use std::collections::BTreeMap;
+use crate::Nextcloud;
+use std::sync::Arc;
+use log::{info, debug};
 
 /// Creates a new deployment of `n` pods with the `imcsk8/nextcloud:latest` docker image inside,
 /// where `n` is the number of `replicas` given.
@@ -18,9 +21,10 @@ use std::collections::BTreeMap;
 pub async fn deploy(
     client: Client,
     name: &str,
-    replicas: i32,
+    nextcloud_object: Arc<Nextcloud>,
     namespace: &str,
 ) -> Result<Deployment, Error> {
+    println!("Deploying: {}", name);
     let mut labels: BTreeMap<String, String> = BTreeMap::new();
     labels.insert("app".to_owned(), name.to_owned());
 
@@ -33,7 +37,7 @@ pub async fn deploy(
             ..ObjectMeta::default()
         },
         spec: Some(DeploymentSpec {
-            replicas: Some(replicas),
+            replicas: Some(nextcloud_object.spec.replicas),
             selector: LabelSelector {
                 match_expressions: None,
                 match_labels: Some(labels.clone()),
@@ -41,8 +45,8 @@ pub async fn deploy(
             template: PodTemplateSpec {
                 spec: Some(PodSpec {
                     containers: vec![Container {
-                        name: format!("php-fpm-{}",name).to_owned(),
-                        image: Some("localhost/nextcloud-php-fpm:latest".to_owned()),
+                        name: format!("php-fpm-{}",name).to_string(),
+                        image: Some(nextcloud_object.spec.php_image.clone()),
                         ports: Some(vec![ContainerPort {
                             container_port: 9000,
                             ..ContainerPort::default()
@@ -63,9 +67,11 @@ pub async fn deploy(
 
     // Create the deployment defined above
     let deployment_api: Api<Deployment> = Api::namespaced(client, namespace);
-    deployment_api
+    let ret = deployment_api
         .create(&PostParams::default(), &deployment)
-        .await
+        .await;
+    info!("Done Deploying: {}", name);
+    ret
 }
 
 /// Deletes an existing deployment.
@@ -76,8 +82,17 @@ pub async fn deploy(
 /// - `namespace` - Namespace the existing deployment resides in
 ///
 /// Note: It is assumed the deployment exists for simplicity. Otherwise returns an Error.
+/// https://docs.rs/kube/0.88.1/kube/struct.Api.html#method.delete
 pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<(), Error> {
     let api: Api<Deployment> = Api::namespaced(client, namespace);
-    api.delete(name, &DeleteParams::default()).await?;
-    Ok(())
+    match api.delete(name, &DeleteParams::foreground()).await {
+        Ok(r) => {
+            info!("Resource deleted successfully {:?}", r);
+            Ok(())
+        },
+        Err(e) => {
+            info!("Error deleting resource: {:?}", e);
+            Err(e)
+        }
+    }
 }
