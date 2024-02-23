@@ -1,7 +1,6 @@
 use std::sync::Arc;
-
-use kube::kube_runtime::WatchStreamExt;
-use futures::{pin_mut, TryStreamExt};
+ use std::collections::BTreeMap;
+use futures::{pin_mut, TryStreamExt, StreamExt};
 use kube::runtime::watcher::Config;
 use kube::Resource;
 use kube::ResourceExt;
@@ -15,16 +14,16 @@ use kube::{
     api::ListParams,
 };
 
-
-
 use futures::stream::Stream;
-use futures::TryStreamExt;
 //use kube_runtime::watcher;
 use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::events::v1::Event;
 use tokio::time::Duration;
 use kube::runtime::controller::Error as KubeContError;
 //use log::{info, debug};
 use pretty_env_logger;
+use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+
 #[macro_use] extern crate log;
 
 use crate::crd::{Nextcloud, create_crd};
@@ -34,7 +33,8 @@ mod nextcloud;
 mod finalizer;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+//for watcher experiment async fn main() -> anyhow::Result<()> {
+async fn main() -> Result <(), Error> {
     pretty_env_logger::init_timed();
     // First, a Kubernetes client must be obtained using the `kube` crate
     // The client will later be moved to the custom controller
@@ -49,17 +49,19 @@ async fn main() -> anyhow::Result<()> {
 
     // Preparation of resources used by the `kube_runtime::Controller`
     let crd_api: Api<Nextcloud> = Api::all(kubernetes_client.clone());
+    //let events: Api<Event> = Api::default_namespaced(kubernetes_client.clone());
     let context: Arc<ContextData> = Arc::new(ContextData::new(kubernetes_client.clone()));
 
-    // Watcher
+    // Watcher TODO:
     /*let lp = ListParams::default();
     let mut stream = watcher(custom_resource_api, lp);*/
     //let mut stream = watcher(crd_api, Config::default());
-    let mut stream = watcher(crd_api, Config::default()).default_backoff().applied_objects();
-    pin_mut!(stream);
+    /*
+    let mut event_stream = watcher(events, Config::default()).default_backoff().applied_objects();
+    pin_mut!(event_stream);
 
     // Loop to handle events
-    while let Some(event) = stream.try_next().await? {
+    while let Some(event) = event_stream.try_next().await? {
         match event {
             WatchEvent::Added(nc) => {
                 info!("ADDED: {:?}", nc);
@@ -80,8 +82,8 @@ async fn main() -> anyhow::Result<()> {
             _ => {}
         }
 
-    }
-/*
+    }*/
+
     // The controller comes from the `kube_runtime` crate and manages the reconciliation process.
     // It requires the following information:
     // - `kube::Api<T>` this controller "owns". In this case, `T = Nextcloud`, as this controller owns the `Nextcloud` resource,
@@ -106,8 +108,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }).await;
-    */
-
     Ok(())
 }
 
@@ -163,7 +163,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
     check_component_status(client.clone(), namespace.clone()).await?;
 
     // Performs action as decided by the `determine_action` function.
-    return match determine_action(&nextcloud) {
+    return match determine_action(&nextcloud, client.clone()).await.unwrap() {
         NextcloudAction::Create => {
             // Creates a deployment with `n` Nextcloud service pods, but applies a finalizer first.
             // Finalizer is applied first, as the operator might be shut down and restarted
@@ -187,11 +187,15 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // with that error.
             // Note: A more advanced implementation would check for the Deployment's existence.
             debug!("----------- DELETING THIS BITCH!!!! NAME: {} NAMESPACE: {}", &name, &namespace);
-            nextcloud::delete(client.clone(), &name, &namespace).await?;
+            match nextcloud::delete(client.clone(), &name, &namespace).await {
+                Ok(d)  => info!("Deployment deleted"),
+                Err(e) => info!("No deployments for Nextcloud: {}", name),
+            };
 
             // Once the deployment is successfully removed, remove the finalizer to make it possible
             // for Kubernetes to delete the `Nextcloud` resource.
             finalizer::delete(client, &name, &namespace).await?;
+            info!("Nextcloud resource: {} deleted", name);
             Ok(Action::await_change()) // Makes no sense to delete after a successful delete, as the resource is gone
         }
         // The resource is already in desired state, do nothing and re-check after 10 seconds
@@ -207,34 +211,58 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
 /// - `echo`: A reference to `Nextcloud` being reconciled to decide next action upon.
 /// TODO: check for more resource status
 /// meta() -> https://docs.rs/kube/0.88.1/kube/core/struct.ObjectMeta.html
-fn determine_action(nextcloud: &Nextcloud) -> NextcloudAction {
-    if is_update(&nextcloud) {
+async fn determine_action(nextcloud: &Nextcloud, client: Client) ->
+    Result<NextcloudAction, String> {
+    if is_update(&nextcloud, client).await? {
         info!("--- ES UPDATE");
+    } else {
+        info!("--- NO ES UPDATE");
     }
-    return if nextcloud.meta().deletion_timestamp.is_some() {
-        NextcloudAction::Delete
-    } else if nextcloud
-        .meta()
-        .finalizers
+
+    //info!("NEXTCLOUD? {:?}", &nextcloud);
+    let nc = nextcloud.meta();
+    let name = match &nc.name {
+        Some(n) => n,
+        None    => "N/A",
+    };
+    return if nc.deletion_timestamp.is_some() {
+        info!("Deleting: {}", name);
+        Ok(NextcloudAction::Delete)
+    } else if nc.finalizers
         .as_ref()
         .map_or(true, |finalizers| finalizers.is_empty())
     {
-        NextcloudAction::Create
+        info!("Creating: {}", name);
+        Ok(NextcloudAction::Create)
     } else {
-        NextcloudAction::NoOp
+        info!("Nothing to do for: {}", name);
+        Ok(NextcloudAction::NoOp)
     };
 }
 
-fn is_update(nextcloud: &Nextcloud) -> bool {
+async fn is_update(nc: &Nextcloud, client: Client) ->
+    Result<bool, String> {
 //fn annotations_mut(&mut self) -> &mut BTreeMap<String, String>
-    let nc = nextcloud;
+    let meta = nc.meta();
+    /*let current_state_hash = meta.annotations.unwrap().get("state_hash");
+    let new_state_hash = nextcloud::create_hash(meta.name, nc.spec.replicas,
+        nc.spec.php_image.clone());*/
+    let annotations = match get_annotations(client.clone(),
+        nc.metadata.namespace.clone().unwrap()).await {
+        Ok(a) => a,
+        _     => return Ok(false),
+
+    };
+    info!(" --ANNOTATIONS: {:?}", annotations.clone());
+    info!("--- STATE HASH: {:?}", annotations.get("state_hash"));
+    //info!("---- ANNOTATIONS: {:?}", nc);
     let mf = nc.meta().managed_fields.clone().unwrap();
     let operation = &mf.clone()[mf.len() - 1].operation;
     let update = String::from("Update");
     info!("---- OPERATION: {:?}", mf.clone()[mf.len() - 1].operation);
     match operation {
-        Some(update) => true,
-        _            => false,
+        Some(update) => Ok(true),
+        _            => Ok(false),
     }
 }
 
@@ -249,6 +277,7 @@ fn is_update(nextcloud: &Nextcloud) -> bool {
 /// - `_context`: Unused argument. Context Data "injected" automatically by kube-rs.
 fn on_error(nextcloud: Arc<Nextcloud>, error: &Error, _context: Arc<ContextData>) -> Action {
     //eprintln!("Nextcloud Reconciliation error:\n{:?}\n", error);
+    info!("Error: {:?}", error);
     Action::requeue(Duration::from_secs(5))
 }
 
@@ -269,8 +298,8 @@ pub enum Error {
 /// Check pod and container status
 async fn check_component_status(client: Client, namespace: String) -> Result <(), Error> {
     let pods: Api<Pod> = Api::namespaced(client.clone(), &namespace);
-    //ListParams::default().labels("nextcloud=" + name); // for this app only
     let list_params = ListParams::default();
+    //ListParams::default().labels("nextcloud=" + name); // for this app only
     //for p in pods.list(&list_params).await? {
     for p in pods.list(&list_params).await.unwrap() {
         info!("Checking pod: {} status", p.name_any());
@@ -303,4 +332,22 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
     Ok(())
 }
 
+async fn get_annotations(client: Client, namespace: String) ->
+    Result <BTreeMap<std::string::String, std::string::String>, String> {
+    let list_params = ListParams::default();
+    let deployments: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
+    let mut deployment = deployments.list(&list_params).await.unwrap();
+    //info!("ITEMS: {}", &deployment.items);
+    // We only have one deployment
+    let my_deployment = deployment.items.pop();
+    if my_deployment.is_none() {
+        return Err("No annotations".to_string());
+    }
+    match &my_deployment.unwrap().metadata.annotations {
+        Some(a) =>  {
+            Ok(a.clone())
+        },
+        None => Err("There are no annotations!!!".to_string())
+    }
+}
 
