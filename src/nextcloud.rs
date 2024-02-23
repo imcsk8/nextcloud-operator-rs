@@ -1,8 +1,8 @@
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-use k8s_openapi::api::core::v1::{Container, ContainerPort, PodSpec, PodTemplateSpec};
+use k8s_openapi::api::core::v1::{Container, ContainerPort, PodSpec, PodTemplateSpec, LocalObjectReference};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
-use kube::api::{DeleteParams, ObjectMeta, PostParams};
-use kube::{Api, Client, Error};
+use kube::api::{DeleteParams, ObjectMeta, PostParams, Patch, PatchParams};
+use kube::{Api, Client, Error, Resource};
 use std::collections::BTreeMap;
 use crate::Nextcloud;
 use std::sync::Arc;
@@ -24,9 +24,26 @@ pub async fn deploy(
     nextcloud_object: Arc<Nextcloud>,
     namespace: &str,
 ) -> Result<Deployment, Error> {
-    println!("Deploying: {}", name);
+
+    info!("Deploying: {}", name);
+
     let mut labels: BTreeMap<String, String> = BTreeMap::new();
+    let mut annotations: BTreeMap<String, String> = BTreeMap::new();
     labels.insert("app".to_owned(), name.to_owned());
+    //TODO: use a real hashing function
+    let state_hash = create_hash(name, nextcloud_object.spec.replicas,
+        nextcloud_object.spec.php_image.clone());
+    annotations.insert("state_hash".to_owned(), state_hash.to_owned());
+    info!("---- PULL SECRET? {:?}", nextcloud_object.spec.image_pull_secret.clone());
+    let image_pull_secrets = vec![
+        LocalObjectReference {
+            name: Some(nextcloud_object.spec.image_pull_secret.clone()),
+        },
+    ];
+    /*TODO: check if we can get it as mutable nextcloud_object.metadata
+        .annotations.as_mut().unwrap()
+        .insert("state_hash".to_owned(), state_hash.to_owned());
+    */
 
     // Definition of the deployment. Alternatively, a YAML representation could be used as well.
     let deployment: Deployment = Deployment {
@@ -34,6 +51,7 @@ pub async fn deploy(
             name: Some(name.to_owned()),
             namespace: Some(namespace.to_owned()),
             labels: Some(labels.clone()),
+            annotations: Some(annotations),
             ..ObjectMeta::default()
         },
         spec: Some(DeploymentSpec {
@@ -53,6 +71,7 @@ pub async fn deploy(
                         }]),
                         ..Container::default()
                     }],
+                    image_pull_secrets: Some(image_pull_secrets),
                     ..PodSpec::default()
                 }),
                 metadata: Some(ObjectMeta {
@@ -65,11 +84,19 @@ pub async fn deploy(
         ..Deployment::default()
     };
 
+    // let ssapply = PatchParams::apply("crd_apply_example").force();
+    let patch_params = PatchParams {
+        field_manager: Some("nextcloud_field_manager".to_string()),
+        ..PatchParams::default()
+    };
     // Create the deployment defined above
     let deployment_api: Api<Deployment> = Api::namespaced(client, namespace);
     let ret = deployment_api
-        .create(&PostParams::default(), &deployment)
+        //.create(&PostParams::default(), &deployment)
+        .patch(name, &patch_params, &Patch::Apply(&deployment))
         .await;
+
+        //foos.patch("baz", &ssapply, &Patch::Apply(&foo)).await?;
     info!("Done Deploying: {}", name);
     ret
 }
@@ -95,4 +122,8 @@ pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<(), E
             Err(e)
         }
     }
+}
+
+pub fn create_hash(name: &str, replicas: i32, php_image: String) -> String {
+    format!("{}-{}-{}", name, replicas.to_string(), php_image)
 }
