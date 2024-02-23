@@ -1,0 +1,14 @@
+  'objectstore' => [
+        'class' => '\\OC\\Files\\ObjectStore\\S3',
+        'arguments' => [
+                'bucket' => '{{ nextcloud_s3_bucket }}',
+                'autocreate' => true,
+                'key'    => '{{ nextcloud_s3_key }}',
+                'secret' => '{{ nextcloud_s3_secret }}',
+                'hostname' => '{{ nextcloud_s3_hostname }}',
+                'port' => 9000,
+                'use_ssl' => false,
+                // required for some non Amazon S3 implementations
+                'use_path_style' => true
+         ],
+	],

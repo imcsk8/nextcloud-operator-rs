@@ -1,0 +1,29 @@
+FROM  quay.io/centos/centos:stream9-minimal
+MAINTAINER Iván Chavero <ichavero@chavero.com.mx>
+
+ENV NGINX_VERSION="1.22.1"            \
+    SUMMARY="nginx for nextcloud"     \
+    DESCRIPTION="nginx for nextcloud"
+
+
+LABEL summary="$SUMMARY"                                  \
+      description="$DESCRIPTION"                          \
+      io.k8s.description="$DESCRIPTION"                   \
+      io.k8s.display-name="nginx for nextcloud"           \
+      io.openshift.expose-services=""                     \
+      io.openshift.tags="nginx nextcloud"                 \
+      name="nextcloud-nginx"                              \
+      version="8.2.15"                                    \
+      usage="podman run -d -e -p nextcloud-nginx"         \
+      maintainer="Iván Chavero <ichavero@chavero.com.mx>"
+
+
+RUN microdnf install -y nginx && \
+  mkdir /etc/nginx/nextcloud  && \
+  microdnf clean all
+
+COPY files/coolwsd.conf /etc/nginx/nextcloud/
+COPY files/nextcloud_nginx.conf /etc/nginx/conf.d/
+
+cmd ["/usr/sbin/nginx", "-g", "daemon off;"]
+
