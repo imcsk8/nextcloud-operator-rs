@@ -1,0 +1,62 @@
+FROM  quay.io/centos/centos:stream9-minimal
+MAINTAINER Iván Chavero <ichavero@chavero.com.mx>
+
+ENV PHP_FPM_VERSION="8.2.15"            \
+    SUMMARY="php-fpm for nextcloud"     \
+    DESCRIPTION="php-fpm for nextcloud"
+
+
+LABEL summary="$SUMMARY"                                  \
+      description="$DESCRIPTION"                          \
+      io.k8s.description="$DESCRIPTION"                   \
+      io.k8s.display-name="php-fpm for nextcloud"         \
+      io.openshift.expose-services=""                     \
+      io.openshift.tags="php-fpm nextclou"                \
+      name="nextcloud-php-fpm"                            \
+      version="8.2.15"                                    \
+      usage="podman run -d -e -p nextcloud-php-fpm"       \
+      maintainer="Iván Chavero <ichavero@chavero.com.mx>"
+
+
+RUN microdnf install -y epel-release && \
+  microdnf install --enablerepo=crb -y  libmemcached-awesome \
+  php-fpm            \
+  php-pear           \
+  php-cli            \
+  php-curl           \
+  php-dom            \
+  php-exif           \
+  php-fileinfo       \
+  php-gd             \
+  php-iconv          \
+  php-json           \
+  php-ldap           \
+  php-mbstring       \
+  php-openssl        \
+  php-pcre           \
+  php-pdo            \
+  php-session        \
+  php-simplexml      \
+  php-xmlwriter      \
+  php-spl            \
+  php-zip            \
+  php-filter         \
+  php-ldap           \
+  php-smbclient      \
+  php-gmp            \
+  php-process        \
+  php-pecl-imagick   \
+  php-pecl-memcached \
+  php-pecl-apcu      \
+  php-pecl-redis5    \
+  php-fpm            \
+  php-fpm            \
+  php-mysqlnd        \
+  php-pgsql       && \
+  rm -rf /usr/share/icons /usr/share/doc && \
+  microdnf clean all
+
+COPY files/www.conf /etc/php-fpm.d/www.conf
+
+cmd ["/usr/bin/php-fpm", "-F"]
+
