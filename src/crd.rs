@@ -22,6 +22,7 @@ pub const RESOURCE_NAME: &str = "nextclouds.sotolitolabs.com";
 pub struct NextcloudSpec {
     pub replicas: i32,
     pub php_image: String,
+    pub image_pull_secret: String,
 }
 
 /// Creates the Nextcloud CRD
