@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use futures::stream::StreamExt;
+use kube::kube_runtime::WatchStreamExt;
+use futures::{pin_mut, TryStreamExt};
 use kube::runtime::watcher::Config;
 use kube::Resource;
 use kube::ResourceExt;
@@ -8,9 +9,17 @@ use kube::{
     client::Client,
     runtime::controller::Action,
     runtime::Controller,
+    runtime::{watcher, WatchStreamExt},
     Api,
+    api::WatchEvent,
     api::ListParams,
 };
+
+
+
+use futures::stream::Stream;
+use futures::TryStreamExt;
+//use kube_runtime::watcher;
 use k8s_openapi::api::core::v1::Pod;
 use tokio::time::Duration;
 use kube::runtime::controller::Error as KubeContError;
@@ -25,7 +34,7 @@ mod nextcloud;
 mod finalizer;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init_timed();
     // First, a Kubernetes client must be obtained using the `kube` crate
     // The client will later be moved to the custom controller
@@ -42,6 +51,37 @@ async fn main() {
     let crd_api: Api<Nextcloud> = Api::all(kubernetes_client.clone());
     let context: Arc<ContextData> = Arc::new(ContextData::new(kubernetes_client.clone()));
 
+    // Watcher
+    /*let lp = ListParams::default();
+    let mut stream = watcher(custom_resource_api, lp);*/
+    //let mut stream = watcher(crd_api, Config::default());
+    let mut stream = watcher(crd_api, Config::default()).default_backoff().applied_objects();
+    pin_mut!(stream);
+
+    // Loop to handle events
+    while let Some(event) = stream.try_next().await? {
+        match event {
+            WatchEvent::Added(nc) => {
+                info!("ADDED: {:?}", nc);
+                reconcile(nc, context).await?;
+            },
+            WatchEvent::Modified(nc) => {
+                info!("MODIFIED: {:?}", nc);
+                reconcile(nc, context).await?;
+            },
+            WatchEvent::Deleted(nc) => {
+                info!("DELETED: {:?}", nc);
+                //reconcile(nc).await?;
+            },
+            WatchEvent::Error(err) => {
+                info!("ERROR: {:?}", err);
+                //reconcile(nc).await?;
+            },
+            _ => {}
+        }
+
+    }
+/*
     // The controller comes from the `kube_runtime` crate and manages the reconciliation process.
     // It requires the following information:
     // - `kube::Api<T>` this controller "owns". In this case, `T = Nextcloud`, as this controller owns the `Nextcloud` resource,
@@ -66,6 +106,9 @@ async fn main() {
                 }
             }
         }).await;
+    */
+
+    Ok(())
 }
 
 /// Context injected with each `reconcile` and `on_error` method invocation.
@@ -183,6 +226,7 @@ fn determine_action(nextcloud: &Nextcloud) -> NextcloudAction {
 }
 
 fn is_update(nextcloud: &Nextcloud) -> bool {
+//fn annotations_mut(&mut self) -> &mut BTreeMap<String, String>
     let nc = nextcloud;
     let mf = nc.meta().managed_fields.clone().unwrap();
     let operation = &mf.clone()[mf.len() - 1].operation;
