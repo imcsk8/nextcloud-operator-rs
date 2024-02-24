@@ -32,7 +32,8 @@ pub async fn deploy(
     labels.insert("app".to_owned(), name.to_owned());
     //TODO: use a real hashing function
     let state_hash = create_hash(name, nextcloud_object.spec.replicas,
-        nextcloud_object.spec.php_image.clone());
+        nextcloud_object.spec.php_image.clone(),
+        nextcloud_object.spec.nginx_image.clone());
     annotations.insert("state_hash".to_owned(), state_hash.to_owned());
     info!("---- PULL SECRET? {:?}", nextcloud_object.spec.image_pull_secret.clone());
     let image_pull_secrets = vec![
@@ -62,15 +63,26 @@ pub async fn deploy(
             },
             template: PodTemplateSpec {
                 spec: Some(PodSpec {
-                    containers: vec![Container {
-                        name: format!("php-fpm-{}",name).to_string(),
-                        image: Some(nextcloud_object.spec.php_image.clone()),
-                        ports: Some(vec![ContainerPort {
-                            container_port: 9000,
-                            ..ContainerPort::default()
-                        }]),
+                    containers: vec![
+                        Container {
+                            name: format!("php-fpm-{}",name).to_string(),
+                            image: Some(nextcloud_object.spec.php_image.clone()),
+                            ports: Some(vec![ContainerPort {
+                                container_port: 9000,
+                                ..ContainerPort::default()
+                            }]),
                         ..Container::default()
-                    }],
+                        },
+                        Container {
+                            name: format!("nginx-{}",name).to_string(),
+                            image: Some(nextcloud_object.spec.nginx_image.clone()),
+                            ports: Some(vec![ContainerPort {
+                                container_port: 80,
+                                ..ContainerPort::default()
+                            }]),
+                        ..Container::default()
+                        },
+                    ],
                     image_pull_secrets: Some(image_pull_secrets),
                     ..PodSpec::default()
                 }),
@@ -124,6 +136,7 @@ pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<(), E
     }
 }
 
-pub fn create_hash(name: &str, replicas: i32, php_image: String) -> String {
-    format!("{}-{}-{}", name, replicas.to_string(), php_image)
+pub fn create_hash(name: &str, replicas: i32, php_image: String,
+    nginx_image: String) -> String {
+    format!("{}-{}-{}-{}", name, replicas.to_string(), php_image, nginx_image)
 }
