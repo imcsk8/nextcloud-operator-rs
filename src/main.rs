@@ -1,5 +1,5 @@
 use std::sync::Arc;
- use std::collections::BTreeMap;
+use std::collections::BTreeMap;
 use futures::{pin_mut, TryStreamExt, StreamExt};
 use kube::runtime::watcher::Config;
 use kube::Resource;
@@ -34,7 +34,7 @@ mod finalizer;
 
 #[tokio::main]
 //for watcher experiment async fn main() -> anyhow::Result<()> {
-async fn main() -> Result <(), Error> {
+async fn main() -> Result <(), NextcloudError> {
     pretty_env_logger::init_timed();
     // First, a Kubernetes client must be obtained using the `kube` crate
     // The client will later be moved to the custom controller
@@ -51,38 +51,6 @@ async fn main() -> Result <(), Error> {
     let crd_api: Api<Nextcloud> = Api::all(kubernetes_client.clone());
     //let events: Api<Event> = Api::default_namespaced(kubernetes_client.clone());
     let context: Arc<ContextData> = Arc::new(ContextData::new(kubernetes_client.clone()));
-
-    // Watcher TODO:
-    /*let lp = ListParams::default();
-    let mut stream = watcher(custom_resource_api, lp);*/
-    //let mut stream = watcher(crd_api, Config::default());
-    /*
-    let mut event_stream = watcher(events, Config::default()).default_backoff().applied_objects();
-    pin_mut!(event_stream);
-
-    // Loop to handle events
-    while let Some(event) = event_stream.try_next().await? {
-        match event {
-            WatchEvent::Added(nc) => {
-                info!("ADDED: {:?}", nc);
-                reconcile(nc, context).await?;
-            },
-            WatchEvent::Modified(nc) => {
-                info!("MODIFIED: {:?}", nc);
-                reconcile(nc, context).await?;
-            },
-            WatchEvent::Deleted(nc) => {
-                info!("DELETED: {:?}", nc);
-                //reconcile(nc).await?;
-            },
-            WatchEvent::Error(err) => {
-                info!("ERROR: {:?}", err);
-                //reconcile(nc).await?;
-            },
-            _ => {}
-        }
-
-    }*/
 
     // The controller comes from the `kube_runtime` crate and manages the reconciliation process.
     // It requires the following information:
@@ -138,7 +106,7 @@ enum NextcloudAction {
     NoOp,
 }
 
-async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Result<Action, Error> {
+async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Result<Action, NextcloudError> {
     let client: Client = context.client.clone(); // The `Client` is shared -> a clone from the reference is obtained
 
     // The resource of `Nextcloud` kind is required to have a namespace set. However, it is not guaranteed
@@ -147,7 +115,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
     let namespace: String = match nextcloud.namespace() {
         None => {
             // If there is no namespace to deploy to defined, reconciliation ends with an error immediately.
-            return Err(Error::UserInputError(
+            return Err(NextcloudError::UserInputError(
                 "Expected Nextcloud resource to be namespaced. Can't deploy to an unknown namespace."
                     .to_owned(),
             ));
@@ -160,7 +128,10 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
     info!("Nextcloud resource name: {}", name);
     info!("Nextcloud resource UUID: {}", nextcloud.uid().unwrap());
     info!("Pod List for: {}", name);
-    check_component_status(client.clone(), namespace.clone()).await?;
+    match check_component_status(client.clone(), namespace.clone()).await {
+        Ok(c) => info!("Component status ok {:?}", c),
+        Err(e) => info!("Component status NOT ok {:?}", e),
+    };
 
     // Performs action as decided by the `determine_action` function.
     return match determine_action(&nextcloud, client.clone()).await.unwrap() {
@@ -275,28 +246,14 @@ async fn is_update(nc: &Nextcloud, client: Client) ->
 /// - `nextcloud`: The erroneous resource.
 /// - `error`: A reference to the `kube::Error` that occurred during reconciliation.
 /// - `_context`: Unused argument. Context Data "injected" automatically by kube-rs.
-fn on_error(nextcloud: Arc<Nextcloud>, error: &Error, _context: Arc<ContextData>) -> Action {
+fn on_error(nextcloud: Arc<Nextcloud>, error: &NextcloudError, _context: Arc<ContextData>) -> Action {
     //eprintln!("Nextcloud Reconciliation error:\n{:?}\n", error);
     info!("Error: {:?}", error);
     Action::requeue(Duration::from_secs(5))
 }
 
-/// All errors possible to occur during reconciliation
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// Any error originating from the `kube-rs` crate
-    #[error("Kubernetes reported error: {source}")]
-    KubeError {
-        #[from]
-        source: kube::Error,
-    },
-    /// Error in user input or Nextcloud resource definition, typically missing fields.
-    #[error("Invalid Nextcloud CRD: {0}")]
-    UserInputError(String),
-}
-
 /// Check pod and container status
-async fn check_component_status(client: Client, namespace: String) -> Result <(), Error> {
+async fn check_component_status(client: Client, namespace: String) -> Result <(), String> {
     let pods: Api<Pod> = Api::namespaced(client.clone(), &namespace);
     let list_params = ListParams::default();
     //ListParams::default().labels("nextcloud=" + name); // for this app only
@@ -319,9 +276,13 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
 
         pod_status.container_statuses.clone().unwrap().iter().for_each( move |c| {
             if !c.ready {
-                let state = c.state.clone().unwrap().waiting.unwrap();
-                let reason = format!("{}, {}", state.message.unwrap(), state.reason.unwrap());
-                error!("😢 Container: {} not ready, reason: {}", c.name, reason);
+                if let Some(state) = c.state.clone().unwrap().waiting {
+                    let reason = format!("{}, {}",
+                        state.message.unwrap(),
+                        state.reason.unwrap()
+                    );
+                    error!("😢 Container: {} not ready, reason: {}", c.name, reason);
+                }
             } else {
                 info!("😊 Container: {} ready to go!", c.name);
             }
@@ -351,3 +312,18 @@ async fn get_annotations(client: Client, namespace: String) ->
     }
 }
 
+/// All errors possible to occur during reconciliation
+#[derive(Debug, thiserror::Error)]
+pub enum NextcloudError {
+    /// Any error originating from the `kube-rs` crate
+    #[error("Kubernetes reported error: {source}")]
+    KubeError {
+        #[from]
+        source: kube::Error,
+    },
+    /// Error in user input or Nextcloud resource definition, typically missing fields.
+    #[error("Invalid Nextcloud CRD: {0}")]
+    UserInputError(String),
+    #[error("Deploy Nextcloud Error: {0}")]
+    DeployError(String),
+}
