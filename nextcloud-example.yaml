@@ -8,7 +8,7 @@ spec:
   replicas: 1 # Number of "nextcloud" pods created.
   php_image: quay.io/imcsk8/nextcloud-php-fpm:8.0.30.1
   image_pull_secret: imcsk8
-  #nginx_image: quay.io/imcsk8/nginx:latest
+  nginx_image: quay.io/imcsk8/nextcloud-nginx:1.22.1
   #nextcloud_apps:
   #  - talk
   #  - files
