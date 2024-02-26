@@ -24,6 +24,8 @@ use kube::runtime::controller::Error as KubeContError;
 use pretty_env_logger;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 
+
+
 #[macro_use] extern crate log;
 
 use crate::crd::{Nextcloud, create_crd};
@@ -100,6 +102,8 @@ impl ContextData {
 enum NextcloudAction {
     /// Create the subresources, this includes spawning `n` pods with Nextcloud service
     Create,
+    /// Update subresurces and replicas
+    Update,
     /// Delete all subresources created in the `Create` phase
     Delete,
     /// This `Nextcloud` resource is in desired state and requires no actions to be taken
@@ -135,17 +139,20 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
 
     // Performs action as decided by the `determine_action` function.
     return match determine_action(&nextcloud, client.clone()).await.unwrap() {
-        NextcloudAction::Create => {
+        NextcloudAction::Create | NextcloudAction::Update => {
             // Creates a deployment with `n` Nextcloud service pods, but applies a finalizer first.
             // Finalizer is applied first, as the operator might be shut down and restarted
             // at any time, leaving subresources in intermediate state. This prevents leaks on
             // the `Nextcloud` resource deletion.
 
-            // Apply the finalizer first. If that fails, the `?` operator invokes automatic conversion
+            // Apply the finalizer first. If that fails, the `?` operator
+            // invokes automatic conversion
             // of `kube::Error` to the `Error` defined in this crate.
             finalizer::add(client.clone(), &name, &namespace).await?;
-            // Invoke creation of a Kubernetes built-in resource named deployment with `n` nextcloud service pods.
-            info!("Creating php-fpm endpoint");
+            // Invoke creation/update of a Kubernetes built-in resource named
+            // deployment with `n` nextcloud service pods.
+
+            info!("Creating/Updating php-fpm endpoint");
             nextcloud::deploy(client, &name, nextcloud, &namespace).await?;
             Ok(Action::requeue(Duration::from_secs(10)))
         }
@@ -184,10 +191,12 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
 /// meta() -> https://docs.rs/kube/0.88.1/kube/core/struct.ObjectMeta.html
 async fn determine_action(nextcloud: &Nextcloud, client: Client) ->
     Result<NextcloudAction, String> {
-    if is_update(&nextcloud, client).await? {
-        info!("--- ES UPDATE");
+
+    let updating = is_update(&nextcloud, client).await?;
+    if updating {
+        info!("--- ES UPDATE {:?}", updating);
     } else {
-        info!("--- NO ES UPDATE");
+        info!("--- NO ES UPDATE {:?}", updating);
     }
 
     //info!("NEXTCLOUD? {:?}", &nextcloud);
@@ -199,6 +208,8 @@ async fn determine_action(nextcloud: &Nextcloud, client: Client) ->
     return if nc.deletion_timestamp.is_some() {
         info!("Deleting: {}", name);
         Ok(NextcloudAction::Delete)
+    } else if updating {
+        Ok(NextcloudAction::Update)
     } else if nc.finalizers
         .as_ref()
         .map_or(true, |finalizers| finalizers.is_empty())
@@ -213,7 +224,7 @@ async fn determine_action(nextcloud: &Nextcloud, client: Client) ->
 
 async fn is_update(nc: &Nextcloud, client: Client) ->
     Result<bool, String> {
-//fn annotations_mut(&mut self) -> &mut BTreeMap<String, String>
+
     let meta = nc.meta();
     /*let current_state_hash = meta.annotations.unwrap().get("state_hash");
     let new_state_hash = nextcloud::create_hash(meta.name, nc.spec.replicas,
@@ -224,17 +235,23 @@ async fn is_update(nc: &Nextcloud, client: Client) ->
         _     => return Ok(false),
 
     };
-    info!(" --ANNOTATIONS: {:?}", annotations.clone());
-    info!("--- STATE HASH: {:?}", annotations.get("state_hash"));
-    //info!("---- ANNOTATIONS: {:?}", nc);
-    let mf = nc.meta().managed_fields.clone().unwrap();
-    let operation = &mf.clone()[mf.len() - 1].operation;
-    let update = String::from("Update");
-    info!("---- OPERATION: {:?}", mf.clone()[mf.len() - 1].operation);
-    match operation {
-        Some(update) => Ok(true),
-        _            => Ok(false),
+
+    info!("----- PHP IMAGE: {:?}", nc.spec.php_image.clone());
+
+    let new_state_hash = nextcloud::create_hash(&meta.name.as_ref().unwrap(), nc.spec.replicas,
+        nc.spec.php_image.clone(),
+        nc.spec.nginx_image.clone());
+
+    //let current_state_hash = annotations.get("state_hash").unwrap_or("N/A".to_string()); //TODO: use other default
+    let current_state_hash = annotations.get("state_hash").unwrap();
+    info!("--- NEW STATE HASH: {:?}", new_state_hash);
+    info!("--- CURRENT STATE HASH: {:?}", current_state_hash);
+
+    // If the state hashes are different we're updating
+    if current_state_hash != &new_state_hash {
+        return Ok(true);
     }
+    Ok(false)
 }
 
 
