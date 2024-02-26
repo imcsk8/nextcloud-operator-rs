@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use crate::Nextcloud;
 use std::sync::Arc;
 use log::{info, debug};
+use sha2::{Digest, Sha256};
 
 /// Creates a new deployment of `n` pods with the `imcsk8/nextcloud:latest` docker image inside,
 /// where `n` is the number of `replicas` given.
@@ -136,7 +137,16 @@ pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<(), E
     }
 }
 
+
+/// Creates a sha256 hash from the given attributes
 pub fn create_hash(name: &str, replicas: i32, php_image: String,
     nginx_image: String) -> String {
-    format!("{}-{}-{}-{}", name, replicas.to_string(), php_image, nginx_image)
+    let state_string = format!("{}-{}-{}-{}", name, replicas.to_string(),
+				php_image, nginx_image);
+		let mut hasher = Sha256::new();
+		hasher.update(state_string.as_bytes());
+		hasher.finalize()
+			.iter()
+			.map(|byte| format!("{:02x}", byte))
+			.collect::<String>()
 }
