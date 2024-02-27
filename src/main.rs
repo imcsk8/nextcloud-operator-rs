@@ -276,9 +276,15 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
     //ListParams::default().labels("nextcloud=" + name); // for this app only
     //for p in pods.list(&list_params).await? {
     for p in pods.list(&list_params).await.unwrap() {
-        info!("Checking pod: {} status", p.name_any());
+        let pod_name = p.name_any();
+        info!("Checking pod: {} status", pod_name);
         let pod_status = p.status.clone().unwrap();
-        info!("IP: {}", pod_status.pod_ip.clone().unwrap());
+        match pod_status.pod_ip.clone() {
+            Some(i) => {
+                info!("🙌 Pod IP: {}", pod_status.pod_ip.clone().unwrap());
+            },
+            None => info!("😢 No IP available for: {}", pod_name),
+        };
 
         pod_status.conditions.clone().unwrap().iter().for_each( move |s| {
                 if s.status == "False" {
@@ -287,7 +293,7 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
                         s.reason.clone().unwrap(), s.message.clone().unwrap()
                     );
                 } else {
-                    info!("😊 Condition: {}, Status: {}", s.type_, s.status);
+                    info!("😍 Condition: {}, Status: {}", s.type_, s.status);
                 }
         });
 
@@ -301,7 +307,7 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
                     error!("😢 Container: {} not ready, reason: {}", c.name, reason);
                 }
             } else {
-                info!("😊 Container: {} ready to go!", c.name);
+                info!("🚀 Container: {} ready to go!", c.name);
             }
 
         });
