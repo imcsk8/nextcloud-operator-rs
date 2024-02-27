@@ -52,11 +52,12 @@ RUN microdnf install -y epel-release && \
   php-fpm            \
   php-fpm            \
   php-mysqlnd        \
-  php-pgsql       && \
+  php-pgsql                              && \
+  mkdir -p /run/php-fpm/                 && \
   rm -rf /usr/share/icons /usr/share/doc && \
   microdnf clean all
 
 COPY files/www.conf /etc/php-fpm.d/www.conf
 
-cmd ["/usr/bin/php-fpm", "-F"]
+cmd ["/usr/sbin/php-fpm", "-F"]
 
