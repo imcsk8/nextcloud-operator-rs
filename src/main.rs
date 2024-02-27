@@ -153,7 +153,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // deployment with `n` nextcloud service pods.
 
             info!("Creating/Updating php-fpm endpoint");
-            nextcloud::deploy(client, &name, nextcloud, &namespace).await?;
+            nextcloud::apply(client, &name, nextcloud, &namespace).await?;
             Ok(Action::requeue(Duration::from_secs(10)))
         }
         NextcloudAction::Delete => {
@@ -208,14 +208,15 @@ async fn determine_action(nextcloud: &Nextcloud, client: Client) ->
     return if nc.deletion_timestamp.is_some() {
         info!("Deleting: {}", name);
         Ok(NextcloudAction::Delete)
-    } else if updating {
-        Ok(NextcloudAction::Update)
     } else if nc.finalizers
         .as_ref()
         .map_or(true, |finalizers| finalizers.is_empty())
     {
         info!("Creating: {}", name);
         Ok(NextcloudAction::Create)
+
+    } else if updating {
+        Ok(NextcloudAction::Update)
     } else {
         info!("Nothing to do for: {}", name);
         Ok(NextcloudAction::NoOp)
@@ -238,9 +239,10 @@ async fn is_update(nc: &Nextcloud, client: Client) ->
 
     info!("----- PHP IMAGE: {:?}", nc.spec.php_image.clone());
 
+
+    // Check hash for both nginx and php separately
     let new_state_hash = nextcloud::create_hash(&meta.name.as_ref().unwrap(), nc.spec.replicas,
-        nc.spec.php_image.clone(),
-        nc.spec.nginx_image.clone());
+        nc.spec.php_image.clone());
 
     //let current_state_hash = annotations.get("state_hash").unwrap_or("N/A".to_string()); //TODO: use other default
     let current_state_hash = annotations.get("state_hash").unwrap();
