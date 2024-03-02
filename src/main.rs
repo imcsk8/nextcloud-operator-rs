@@ -40,6 +40,7 @@ async fn main() -> Result <(), NextcloudError> {
     pretty_env_logger::init_timed();
     // First, a Kubernetes client must be obtained using the `kube` crate
     // The client will later be moved to the custom controller
+    info!("--------- WTF!!");
     let kubernetes_client: Client = Client::try_default()
         .await
         .expect("Expected a valid KUBECONFIG environment variable.");
@@ -233,7 +234,12 @@ async fn is_update(nc: &Nextcloud, client: Client) ->
     let annotations = match get_annotations(client.clone(),
         nc.metadata.namespace.clone().unwrap()).await {
         Ok(a) => a,
-        _     => return Ok(false),
+        _     => {
+            // No annotations means that the object is being created
+            info!("Is creating");
+            return Ok(true);
+        },
+
 
     };
 
