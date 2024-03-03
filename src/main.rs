@@ -46,12 +46,20 @@ async fn main() -> Result <(), NextcloudError> {
         .expect("Expected a valid KUBECONFIG environment variable.");
 
 
+    info!("Antes de borrrar");
+            finalizer::delete(kubernetes_client.clone(), "test2-nextcloud-imcsk8", "rust-example-operator").await?;
+    info!("Después de borrrar");
+
+
+
     debug!("---- Before creating crd ---");
     create_crd(kubernetes_client.clone()).await;
     debug!("---- After creating crd ---");
 
     // Preparation of resources used by the `kube_runtime::Controller`
+    info!("Antes de api");
     let crd_api: Api<Nextcloud> = Api::all(kubernetes_client.clone());
+    info!("Después de api");
     //let events: Api<Event> = Api::default_namespaced(kubernetes_client.clone());
     let context: Arc<ContextData> = Arc::new(ContextData::new(kubernetes_client.clone()));
 
@@ -137,6 +145,9 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
         Ok(c) => info!("Component status ok {:?}", c),
         Err(e) => info!("Component status NOT ok {:?}", e),
     };
+
+
+
 
     // Performs action as decided by the `determine_action` function.
     return match determine_action(&nextcloud, client.clone()).await.unwrap() {
