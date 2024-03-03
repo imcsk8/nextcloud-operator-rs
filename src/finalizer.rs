@@ -2,6 +2,7 @@ use crate::crd::Nextcloud;
 use kube::api::{Patch, PatchParams};
 use kube::{Api, Client, Error};
 use serde_json::{json, Value};
+use kube::CustomResourceExt;
 
 /// Adds a finalizer record into an `Echo` kind of resource. If the finalizer already exists,
 /// this action has no effect.
@@ -41,7 +42,7 @@ pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<Nextc
         }
     });
 
-    let patch: Patch<&Value> = Patch::Apply(&finalizer);
+    let patch: Patch<&Value> = Patch::Merge(&finalizer);
     //api.patch(name, &PatchParams::default(), &patch).await
-    api.patch(name, &PatchParams::default().force(), Nextcloud::crd()).await
+    api.patch(name, &PatchParams::default().force(), &Patch::Apply(Nextcloud::crd())).await
 }
