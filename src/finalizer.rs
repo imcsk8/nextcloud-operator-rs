@@ -1,5 +1,5 @@
 use crate::crd::Nextcloud;
-use kube::api::{Patch, PatchParams};
+use kube::api::{Patch, PatchParams, DeleteParams};
 use kube::{Api, Client, Error};
 use serde_json::{json, Value};
 use kube::CustomResourceExt;
@@ -34,7 +34,8 @@ pub async fn add(client: Client, name: &str, namespace: &str) -> Result<Nextclou
 /// - `namespace` - Namespace where the `Nextcloud` resource with given `name` resides.
 ///
 /// Note: Does not check for resource's existence for simplicity.
-pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<Nextcloud, Error> {
+//pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<Nextcloud, Error> {
+pub async fn delete(client: Client, name: &str, namespace: &str) -> Result <(), Error> {
     let api: Api<Nextcloud> = Api::namespaced(client, namespace);
     let finalizer: Value = json!({
         "metadata": {
@@ -50,7 +51,12 @@ pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<Nextc
     info!("CRD {:?}", Nextcloud::crd());
     let mut nc = Nextcloud::crd();
     nc.metadata.finalizers = None;
-    info!("PATCH PARAMS {:?}", &params.clone().force());
 
-    api.patch(name, &params.force(), &Patch::Apply(&nc)).await
+    let dp = DeleteParams::default();
+    info!("----- Before deleting...");
+    api.delete(name, &dp).await?
+        .map_left(|o| println!("Deleting CRD: {:?}", o))
+        .map_right(|s| println!("Deleted CRD: {:?}", s));
+    Ok(())
+    //api.patch(name, &params.force(), &Patch::Apply(&nc)).await
 }
