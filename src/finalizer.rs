@@ -44,5 +44,13 @@ pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<Nextc
 
     let patch: Patch<&Value> = Patch::Merge(&finalizer);
     //api.patch(name, &PatchParams::default(), &patch).await
-    api.patch(name, &PatchParams::default().force(), &Patch::Apply(Nextcloud::crd())).await
+    let mut params = PatchParams::default();
+    params.field_manager = Some("Nextcloud".to_string());
+
+    info!("CRD {:?}", Nextcloud::crd());
+    let mut nc = Nextcloud::crd();
+    nc.metadata.finalizers = None;
+    info!("PATCH PARAMS {:?}", &params.clone().force());
+
+    api.patch(name, &params.force(), &Patch::Apply(&nc)).await
 }
