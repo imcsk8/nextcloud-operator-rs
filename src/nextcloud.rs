@@ -114,7 +114,7 @@ pub async fn apply(
             image_pull_secrets: image_pull_secrets.clone(),
             annotations: annotations.clone(),
         },
-        NextcloudElement {
+        /*NextcloudElement {
             name: "nginx".to_string(),
             prefix: "nginx".to_string(),
             image: nextcloud_object.spec.nginx_image.clone(),
@@ -124,7 +124,7 @@ pub async fn apply(
             labels: labels.clone(),
             image_pull_secrets: image_pull_secrets.clone(),
             annotations: annotations.clone(),
-        },
+        },*/
     ];
 
     let patch_params = PatchParams {
