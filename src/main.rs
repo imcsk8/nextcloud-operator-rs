@@ -45,21 +45,12 @@ async fn main() -> Result <(), NextcloudError> {
         .await
         .expect("Expected a valid KUBECONFIG environment variable.");
 
-
-    info!("Antes de borrrar");
-            finalizer::delete(kubernetes_client.clone(), "test2-nextcloud-imcsk8", "rust-example-operator").await?;
-    info!("Después de borrrar");
-
-
-
     debug!("---- Before creating crd ---");
     create_crd(kubernetes_client.clone()).await;
     debug!("---- After creating crd ---");
 
     // Preparation of resources used by the `kube_runtime::Controller`
-    info!("Antes de api");
     let crd_api: Api<Nextcloud> = Api::all(kubernetes_client.clone());
-    info!("Después de api");
     //let events: Api<Event> = Api::default_namespaced(kubernetes_client.clone());
     let context: Arc<ContextData> = Arc::new(ContextData::new(kubernetes_client.clone()));
 
@@ -133,8 +124,6 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
                     .to_owned(),
             ));
         }
-        // If namespace is known, proceed. In a more advanced version of the operator, perhaps
-        // the namespace could be checked for existence first.
         Some(namespace) => namespace,
     };
     let name = nextcloud.name_any(); // Name of the Nextcloud resource is used to name the subresources as well.
@@ -176,7 +165,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // automatically converted into `Error` defined in this crate and the reconciliation is ended
             // with that error.
             // Note: A more advanced implementation would check for the Deployment's existence.
-            debug!("----------- DELETING THIS BITCH!!!! NAME: {} NAMESPACE: {}", &name, &namespace);
+            debug!("DELETING: {} NAMESPACE: {}", &name, &namespace);
             match nextcloud::delete(client.clone(), &name, &namespace).await {
                 Ok(d)  => info!("Deployment deleted"),
                 Err(e) => info!("No deployments for Nextcloud: {}", name),
@@ -206,9 +195,9 @@ async fn determine_action(nextcloud: &Nextcloud, client: Client) ->
 
     let updating = is_update(&nextcloud, client).await?;
     if updating {
-        info!("--- ES UPDATE {:?}", updating);
+        info!("Update {:?}", updating);
     } else {
-        info!("--- NO ES UPDATE {:?}", updating);
+        info!("Not an update {:?}", updating);
     }
 
     //info!("NEXTCLOUD? {:?}", &nextcloud);
@@ -261,13 +250,15 @@ async fn is_update(nc: &Nextcloud, client: Client) ->
     let new_state_hash = nextcloud::create_hash(&meta.name.as_ref().unwrap(), nc.spec.replicas,
         nc.spec.php_image.clone());
 
-    //let current_state_hash = annotations.get("state_hash").unwrap_or("N/A".to_string()); //TODO: use other default
-    let current_state_hash = annotations.get("state_hash").unwrap();
+    let current_state_hash: String = annotations.get("state_hash")
+        .unwrap_or(&String::from("N/A"))
+        .to_string(); //TODO: use other default
+    //let current_state_hash = annotations.get("state_hash").unwrap();
     info!("--- NEW STATE HASH: {:?}", new_state_hash);
     info!("--- CURRENT STATE HASH: {:?}", current_state_hash);
 
     // If the state hashes are different we're updating
-    if current_state_hash != &new_state_hash {
+    if current_state_hash != new_state_hash {
         return Ok(true);
     }
     Ok(false)
