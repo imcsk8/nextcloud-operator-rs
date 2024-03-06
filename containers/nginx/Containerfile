@@ -13,7 +13,7 @@ LABEL summary="$SUMMARY"                                  \
       io.openshift.expose-services=""                     \
       io.openshift.tags="nginx nextcloud"                 \
       name="nextcloud-nginx"                              \
-      version="8.2.15"                                    \
+      version="1.22.1-1"                                    \
       usage="podman run -d -e -p nextcloud-nginx"         \
       maintainer="Iván Chavero <ichavero@chavero.com.mx>"
 
@@ -22,7 +22,7 @@ RUN microdnf install -y nginx && \
   mkdir /etc/nginx/nextcloud  && \
   microdnf clean all
 
-COPY files/coolwsd.conf /etc/nginx/nextcloud/
+#TODO: enable later COPY files/coolwsd.conf /etc/nginx/nextcloud/
 COPY files/nextcloud_nginx.conf /etc/nginx/conf.d/
 
 cmd ["/usr/sbin/nginx", "-g", "daemon off;"]
