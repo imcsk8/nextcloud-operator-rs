@@ -1,5 +1,14 @@
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-use k8s_openapi::api::core::v1::{Container, ContainerPort, PodSpec, PodTemplateSpec, LocalObjectReference};
+use k8s_openapi::api::core::v1::{
+    Container,
+    ContainerPort,
+    PodSpec,
+    PodTemplateSpec,
+    LocalObjectReference,
+    Service,
+    ServiceSpec,
+    ServicePort,
+};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{DeleteParams, ObjectMeta, PostParams, Patch, PatchParams};
 use kube::{Api, Client, Error, Resource};
@@ -9,6 +18,7 @@ use std::sync::Arc;
 use log::{info, debug};
 use sha2::{Digest, Sha256};
 
+#[derive(Debug)]
 struct NextcloudElement {
     name: String,
     prefix: String,
@@ -76,6 +86,35 @@ impl NextcloudElement {
             ..Deployment::default()
         })
     }
+
+    /// returns a new service for the NextcloudElement object
+    pub fn create_service(&self)
+        -> Result<Service, Error> {
+        Ok(Service {
+            metadata: ObjectMeta {
+                name: Some(format!("service-{}-{}", self.prefix, self.name)),
+                namespace: Some(self.namespace.to_owned()),
+                labels: Some(self.labels.clone()),
+                annotations: Some(self.annotations.clone()),
+                ..ObjectMeta::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: Some("LoadBalancer".to_string()),
+                ports: Some(vec![
+                    ServicePort {
+                        port: self.container_port,
+                        //TODO: check if we need other protocols
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    },
+                // The selector must contain the object labels
+                ]),
+                selector: Some(self.labels.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
 }
 
 pub async fn apply(
@@ -105,7 +144,7 @@ pub async fn apply(
     let nextcloud_elements = vec![
         NextcloudElement {
             name: "php-fpm".to_string(),
-            prefix: "php-fpm".to_string(),
+            prefix: "nextcloud".to_string(),
             image: nextcloud_object.spec.php_image.clone(),
             namespace: namespace.to_string(),
             replicas: nextcloud_object.spec.replicas, //TODO: should we use different replica size for each deployment?
@@ -114,9 +153,9 @@ pub async fn apply(
             image_pull_secrets: image_pull_secrets.clone(),
             annotations: annotations.clone(),
         },
-        /*NextcloudElement {
+        NextcloudElement {
             name: "nginx".to_string(),
-            prefix: "nginx".to_string(),
+            prefix: "nextcloud".to_string(),
             image: nextcloud_object.spec.nginx_image.clone(),
             namespace: namespace.to_string(),
             replicas: nextcloud_object.spec.replicas,
@@ -124,7 +163,7 @@ pub async fn apply(
             labels: labels.clone(),
             image_pull_secrets: image_pull_secrets.clone(),
             annotations: annotations.clone(),
-        },*/
+        },
     ];
 
     let patch_params = PatchParams {
@@ -132,7 +171,11 @@ pub async fn apply(
         ..PatchParams::default()
     };
 
+    // Create the deployment defined above
+    let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
+    let service_api: Api<Service> = Api::namespaced(client.clone(), namespace.clone());
     for dep in nextcloud_elements {
+        info!("CREATING ELEMENT: {:?}", dep);
         let state_hash = create_hash(
             name,
             dep.replicas,
@@ -140,14 +183,25 @@ pub async fn apply(
         );
         annotations.insert("state_hash".to_owned(), state_hash);
         let deployment = dep.as_deployment()?;
+        info!("Deployment: {:?}", &deployment);
 
-        // Create the deployment defined above
-        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
-        let ret = deployment_api
-            .patch(name, &patch_params, &Patch::Apply(&deployment))
+        let _ret = deployment_api
+            .patch(&dep.name, &patch_params, &Patch::Apply(&deployment))
             .await;
-        info!("Done Deploying: {}", dep.name);
+        info!("RESULT Deployment: {:?}", _ret);
+        info!("Done applying Deployment: {}", dep.name);
+        let service = dep.create_service()?;
+        let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
+        let _result = service_api
+            .patch(
+                service_name.as_str(),
+                &patch_params,
+                &Patch::Apply(&service)
+            )
+            .await?;
+        info!("Done applying Service: {}", service_name);
     }
+
 
     Ok(())
 }
