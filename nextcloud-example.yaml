@@ -1,14 +1,13 @@
-# Example of Nextcloud deployment. The operator will receive this specification and will create a deployment of two "echo" pods.
 apiVersion: sotolitolabs.com/v1
 kind: Nextcloud # Identifier of the resource type.
 metadata:
-  name: test2-nextcloud-imcsk8 # Name of the "Echo" custom resource instance, may be changed to your liking
+  name: test3-nextcloud-imcsk8
   namespace: rust-nextcloud-operator # Namespace must exist and account in KUBECONFIG must have sufficient permissions
 spec:
   replicas: 1 # Number of "nextcloud" pods created.
   php_image: quay.io/imcsk8/nextcloud-php-fpm:8.0.30.5
   image_pull_secret: imcsk8
-  nginx_image: quay.io/imcsk8/nextcloud-nginx:1.22.1
+  nginx_image: quay.io/imcsk8/nextcloud-nginx:1.22.3
   #nextcloud_apps:
   #  - talk
   #  - files
