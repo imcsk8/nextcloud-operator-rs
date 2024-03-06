@@ -300,7 +300,8 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
                 if s.status == "False" {
                     error!("😢 Condition: {}, Status: {}", s.type_, s.status);
                     error!("😢 Reason: {}, Message: {}",
-                        s.reason.clone().unwrap(), s.message.clone().unwrap()
+                        s.reason.clone().unwrap_or("N/A".to_string()),
+                        s.message.clone().unwrap_or("N/A".to_string())
                     );
                 } else {
                     info!("😍 Condition: {}, Status: {}", s.type_, s.status);
@@ -311,8 +312,8 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
             if !c.ready {
                 if let Some(state) = c.state.clone().unwrap().waiting {
                     let reason = format!("{}, {}",
-                        state.message.unwrap(),
-                        state.reason.unwrap()
+                        state.message.unwrap_or("N/A".to_string()),
+                        state.reason.unwrap_or("N/A".to_string())
                     );
                     error!("😢 Container: {} not ready, reason: {}", c.name, reason);
                 }
