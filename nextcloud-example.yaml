@@ -8,6 +8,8 @@ spec:
   php_image: quay.io/imcsk8/nextcloud-php-fpm:8.0.30.5
   image_pull_secret: imcsk8
   nginx_image: quay.io/imcsk8/nextcloud-nginx:1.22.1-2
+  version: 28.0.3
+  maintenance: false
   #nextcloud_apps:
   #  - talk
   #  - files
