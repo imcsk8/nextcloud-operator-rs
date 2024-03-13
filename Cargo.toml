@@ -9,9 +9,10 @@ tokio = { version = "1.0", features = [
     "macros",
     "rt-multi-thread",
 ] } # Macros for easy project setup and testing, multi-threaded runtime for best utilization of resources
-kube = { version = "0.88", default-features = true, features = [
+kube = { version = "0.88.1", default-features = true, features = [
     "derive",
     "runtime",
+    "ws",
 ] } # Library for talking to Kubernetes API
 k8s-openapi = { version = "0.21", default-features = false, features = [
     "v1_26",
@@ -28,3 +29,4 @@ schemars = "0.8"
 thiserror = "1"    # Custom Error definitions and convenient error mappings
 crypto = "0.5.1"
 sha2 = "0.10.8"
+indoc = "2.0.4"
