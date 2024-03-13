@@ -2,22 +2,46 @@ use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
     Container,
     ContainerPort,
+    Pod,
     PodSpec,
     PodTemplateSpec,
     LocalObjectReference,
     Service,
     ServiceSpec,
     ServicePort,
+    PersistentVolumeClaim,
+    PersistentVolumeClaimSpec,
+    PersistentVolumeClaimVolumeSource,
+    ResourceRequirements,
+    Volume,
+    VolumeMount,
+    //Does not exist VolumeResourceRequirements,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
-use kube::api::{DeleteParams, ObjectMeta, PostParams, Patch, PatchParams};
-use kube::{Api, Client, Error, Resource};
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use kube::core::subresource::AttachParams;
+use kube::api::{
+    DeleteParams,
+    ObjectMeta,
+    PostParams,
+    Patch,
+    PatchParams,
+    ListParams,
+};
+use kube::{Api, Client, Error, Resource, ResourceExt};
 use std::collections::BTreeMap;
 use crate::Nextcloud;
 use std::sync::Arc;
 use log::{info, debug};
 use sha2::{Digest, Sha256};
+use thiserror::Error;
+use indoc::formatdoc;
+use tokio::io::{self, BufReader, AsyncReadExt, AsyncBufReadExt};
+use serde::de::DeserializeOwned;
+use std::fmt::Debug;
 
+
+/// Represents NextCloud deployments
 #[derive(Debug)]
 struct NextcloudElement {
     name: String,
@@ -31,6 +55,69 @@ struct NextcloudElement {
     annotations: BTreeMap<String, String>,
 }
 
+/// All errors possible to occur during reconciliation
+#[derive(Debug, Error)]
+pub enum NextcloudError {
+    /// Any error originating from the `kube-rs` crate
+    #[error("Kubernetes reported error: {source}")]
+    KubeError {
+        #[from]
+        source: kube::Error,
+    },
+    /// Error in user input or Nextcloud resource definition, typically missing fields.
+    #[error("Invalid Nextcloud CRD: {0}")]
+    UserInputError(String),
+    #[error("Deploy Nextcloud Error: {0}")]
+    DeployError(String),
+}
+
+/// Nextcloud application management<
+/*pub trait NextcloudApp {
+    async fn is_installed(&self, client: Client, name: &str)
+        -> Result<bool, NextcloudError>;
+    //fn get_pod(&self, name: String) -> Result<Pod, NextcloudError>;
+}
+
+
+impl NextcloudApp for Nextcloud {
+    async fn is_installed(&self, client: Client, pod_name: &str) -> Result<bool, NextcloudError> {
+        //let pod = self.get_pod("nginx")?
+        let occ = "/usr/share/nginx/html/occ"; // Hardcoded because we're a particular setup
+        //TODO: revisar una manera mas precisa de revisar si nextcloud está instalado
+        let installed_command = formatdoc! {"
+              timeout 10 sudo -u nginx /usr/bin/php {} status | \
+              grep installed | cut -d':' -f 2 | sed 's/     //'
+        ", occ};
+        let params = AttachParams::default();
+        let pods: Api<Pod> = Api::namespaced(
+            client,
+            &self.meta().namespace.unwrap().as_str()
+        );
+        params.stdout(true);
+        let ret = match pods.exec(pod_name, installed_command.chars(), &params).await {
+            Ok(r) => r.stdout().unwrap(),
+            Err(e) =>  { return Err(NextcloudError::DeployError(e.to_string())); }
+
+        };
+        let mut buf = String::new();
+        ret.read_line(&mut buf).await.unwrap();
+        info!("----- RET {:?}", buf);
+        Ok(true)
+    }
+
+    /*fn get_pod(&self, name: String) -> Result<Pod, NextcloudError> {
+        let pods: Api<Pod> = Api::namespaced(client, &namespace);
+        match pods.get(name) {
+            Ok(p)  => p,
+            Err(e) => {
+                return NextcloudError(e);
+            }
+        }
+    }*/
+
+}
+
+*/
 
 /// NextcloudElement implementation
 impl NextcloudElement {
@@ -70,9 +157,27 @@ impl NextcloudElement {
                                     container_port: self.container_port,
                                     ..ContainerPort::default()
                                 }]),
+                                volume_mounts: Some(vec![
+                                    VolumeMount {
+                                        mount_path: "/usr/share/nginx/html".to_string(),
+                                        name: format!("pv-{}-{}", self.prefix, self.name),
+                                        read_only: Some(false),
+                                        ..VolumeMount::default()
+                                    }
+
+                                ]),
                             ..Container::default()
                             },
                         ],
+
+                        volumes: Some(vec![Volume {
+                            name: format!("pv-{}-{}", self.prefix, self.name),
+                            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                                claim_name: format!("pvc-{}-{}", self.prefix, self.name),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }]),
                         image_pull_secrets: Some(self.image_pull_secrets.clone()),
                         ..PodSpec::default()
                     }),
@@ -115,6 +220,41 @@ impl NextcloudElement {
             ..Default::default()
         })
     }
+
+    /// Creates a PersistentVolumeClaim
+    /// https://docs.rs/k8s-openapi/0.21.0/k8s_openapi/api/core/v1/struct.PersistentVolumeClaimSpec.html
+    /// https://kubernetes.io/docs/concepts/storage/persistent-volumes/#class-1
+    fn create_pvc(&self)
+        -> Result<PersistentVolumeClaim, Error> {
+        Ok(PersistentVolumeClaim {
+                metadata: ObjectMeta {
+                    name: Some(format!("pvc-{}-{}", self.prefix, self.name)),
+                    namespace: Some(self.namespace.to_owned()),
+                    labels: Some(self.labels.clone()),
+                    annotations: Some(self.annotations.clone()),
+                    ..ObjectMeta::default()
+                },
+                spec: Some(PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    //TODO: make this a parameter storage_class_name: Some(""),
+                    resources: Some(ResourceRequirements {
+                        requests: Some(
+                                  BTreeMap::from([
+                                      ("storage".to_string(), Quantity("5Gi".to_string())),
+                                  ])
+                                ),
+                      ..Default::default()
+                    }),
+                    selector: Some(LabelSelector {
+                        match_expressions: None,
+                        match_labels: Some(self.labels.clone()),
+                    }),
+                    ..PersistentVolumeClaimSpec::default()
+                }),
+                ..PersistentVolumeClaim::default()
+            }
+        )
+    }
 }
 
 pub async fn apply(
@@ -122,7 +262,7 @@ pub async fn apply(
     name: &str,
     nextcloud_object: Arc<Nextcloud>,
     namespace: &str,
-) -> Result<(), Error> {
+) -> Result<(), NextcloudError> {
 
     info!("Applying Nextcloud elements: {}", name);
     let deployments = vec![
@@ -133,6 +273,7 @@ pub async fn apply(
     let mut labels: BTreeMap<String, String> = BTreeMap::new();
     let mut annotations: BTreeMap<String, String> = BTreeMap::new();
     labels.insert("app".to_owned(), name.to_owned());
+    annotations.insert("installed".to_owned(), "false".to_owned());
 
     info!("---- PULL SECRET? {:?}", nextcloud_object.spec.image_pull_secret.clone());
     let image_pull_secrets = vec![
@@ -171,11 +312,50 @@ pub async fn apply(
         ..PatchParams::default()
     };
 
+    let list_params = ListParams::default();
+    // Use the nginx element
+    let pvc = nextcloud_elements[1].create_pvc()?;
+    let pvc_api: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), namespace);
+    //let mut pvcs = match pcv_api.list(&list_params).await {
+    let pvc_name = match pvc.meta().name.clone() { //TODO: remove unwrap
+        Some(n) => n,
+        None    => {
+            info!("Error getting PVC resource name");
+            return Err(
+                NextcloudError::DeployError(
+                    "Error getting PVC resource name".to_string()
+                )
+            );
+        }
+    };
+
+    info!("-------- PVCS {:?}", pvc_api.list(&list_params).await.unwrap().items.len());
+    let pvc_list = match pvc_api.list(&list_params).await {
+        Ok(l) => l,
+        Err(e) => {
+            return Err(NextcloudError::KubeError { source:e });
+        }
+    };
+    let pvc_len = pvc_list.items.len();
+    // No PVC yet
+    if pvc_len <= 0 {
+        info!("Creating PVC: {}", pvc_name);
+        let _result = pvc_api
+            .patch(
+                pvc_name.as_str(),
+                &patch_params,
+                &Patch::Apply(&pvc)
+            )
+            .await?;
+    } else {
+        info!("PV {} already exists", pvc_name);
+    }
+
     // Create the deployment defined above
     let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
     let service_api: Api<Service> = Api::namespaced(client.clone(), namespace.clone());
     for dep in nextcloud_elements {
-        info!("CREATING ELEMENT: {:?}", dep);
+        //info!("CREATING ELEMENT: {:?}", dep);
         let state_hash = create_hash(
             name,
             dep.replicas,
@@ -183,12 +363,12 @@ pub async fn apply(
         );
         annotations.insert("state_hash".to_owned(), state_hash);
         let deployment = dep.as_deployment()?;
-        info!("Deployment: {:?}", &deployment);
+        //info!("Deployment: {:?}", &deployment);
 
         let _ret = deployment_api
             .patch(&dep.name, &patch_params, &Patch::Apply(&deployment))
             .await;
-        info!("RESULT Deployment: {:?}", _ret);
+        //info!("RESULT Deployment: {:?}", _ret);
         info!("Done applying Deployment: {}", dep.name);
         let service = dep.create_service()?;
         let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
@@ -199,6 +379,9 @@ pub async fn apply(
                 &Patch::Apply(&service)
             )
             .await?;
+
+        /*let ret = nextcloud_object.is_installed(client.clone(), "nginx").await;
+        info!("iS INSTALLED: {:?}", ret);*/
         info!("Done applying Service: {}", service_name);
     }
 
@@ -215,19 +398,68 @@ pub async fn apply(
 ///
 /// Note: It is assumed the deployment exists for simplicity. Otherwise returns an Error.
 /// https://docs.rs/kube/0.88.1/kube/struct.Api.html#method.delete
-pub async fn delete(client: Client, name: &str, namespace: &str) -> Result<(), Error> {
-    let api: Api<Deployment> = Api::namespaced(client, namespace);
-    match api.delete(name, &DeleteParams::foreground()).await {
-        Ok(r) => {
-            info!("Resource deleted successfully {:?}", r);
-            Ok(())
-        },
-        Err(e) => {
-            info!("Error deleting resource: {:?}", e);
-            Err(e)
-        }
+pub async fn delete_elements(client: Client, namespace: &str) ->
+    Result<(), Error> {
+    info!("--------- Deleting Nextcloud deployments for: in namespace {}", &namespace);
+
+    //TODO: Check how to avoid having two for loops
+    let api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
+    let delete_params = DeleteParams::default();
+    //let mut error = ("".to_string(), false);
+    let elements = vec!["nginx", "php-fpm"];
+    for elem in elements.iter() {
+        match api.delete(elem, &delete_params).await {
+            Ok(r)  => info!("{} delete Ok response: {:?}", &elem, r),
+            Err(e) => {
+                info!("{} delete Err response: {:?}", &elem, e);
+                /*info!("{} delete Err response: {:?}", &elem, e);
+                error = (elem.to_string(), true);*/
+            }
+        };
+    }
+
+
+    info!("--------- Deleting Nextcloud services for namespace {}", &namespace);
+    let api: Api<Service> = Api::namespaced(client.clone(), namespace);
+    let elements = vec!["service-nextcloud-nginx", "service-nextcloud-php-fpm"];
+    for elem in elements.iter() {
+        match api.delete(elem, &delete_params).await {
+            Ok(r)  => info!("{} delete Ok response: {:?}", &elem, r),
+            Err(e) => {
+                info!("{} delete Err response: {:?}", &elem, e);
+                /*info!("{} delete Err response: {:?}", &elem, e);
+                error = (elem.to_string(), true);*/
+            }
+        };
+    }
+
+    Ok(())
+}
+
+
+
+/* TODO: check trait bounds problem
+/// Delete a list of resources
+pub async fn delete_list<T>(api: Api<T>, elements: Vec<&str>) -> Result<(), Error> {
+    let delete_params = DeleteParams::default();
+    let mut error = ("".to_string(), false);
+    for elem in elements.iter() {
+        match api.delete(elem, &delete_params).await {
+            Ok(r)  => info!("{} delete Ok response: {:?}", &elem, r),
+            Err(e) => {
+                info!("{} delete Err response: {:?}", &elem, e);
+                error = (elem.to_string(), true);
+            }
+        };
+    }
+
+    if ! error.1 {
+        Ok(())
+    } else {
+        Err("Could not delete {}, check the logs", error.0)
     }
 }
+*/
 
 
 /// Creates a sha256 hash from the given attributes
