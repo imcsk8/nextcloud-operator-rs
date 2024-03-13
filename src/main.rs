@@ -24,11 +24,10 @@ use kube::runtime::controller::Error as KubeContError;
 use pretty_env_logger;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 
-
-
 #[macro_use] extern crate log;
 
 use crate::crd::{Nextcloud, create_crd};
+use nextcloud::*;
 
 pub mod crd;
 mod nextcloud;
@@ -40,7 +39,6 @@ async fn main() -> Result <(), NextcloudError> {
     pretty_env_logger::init_timed();
     // First, a Kubernetes client must be obtained using the `kube` crate
     // The client will later be moved to the custom controller
-    info!("--------- WTF!!");
     let kubernetes_client: Client = Client::try_default()
         .await
         .expect("Expected a valid KUBECONFIG environment variable.");
@@ -113,6 +111,9 @@ enum NextcloudAction {
 async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Result<Action, NextcloudError> {
     let client: Client = context.client.clone(); // The `Client` is shared -> a clone from the reference is obtained
 
+
+    info!("----- STATUS? {:?}", nextcloud.status);
+
     // The resource of `Nextcloud` kind is required to have a namespace set. However, it is not guaranteed
     // the resource will have a `namespace` set. Therefore, the `namespace` field on object's metadata
     // is optional and Rust forces the programmer to check for it's existence first.
@@ -154,7 +155,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // deployment with `n` nextcloud service pods.
 
             info!("Creating/Updating php-fpm endpoint");
-            nextcloud::apply(client, &name, nextcloud, &namespace).await?;
+            apply(client, &name, nextcloud, &namespace).await?;
             Ok(Action::requeue(Duration::from_secs(10)))
         }
         NextcloudAction::Delete => {
@@ -166,8 +167,8 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // with that error.
             // Note: A more advanced implementation would check for the Deployment's existence.
             debug!("DELETING: {} NAMESPACE: {}", &name, &namespace);
-            match nextcloud::delete(client.clone(), &name, &namespace).await {
-                Ok(d)  => info!("Deployment deleted"),
+            match delete_elements(client.clone(), &namespace).await {
+                Ok(d)  => info!("Deployments deleted"),
                 Err(e) => info!("No deployments for Nextcloud: {}", name),
             };
 
@@ -175,7 +176,8 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // for Kubernetes to delete the `Nextcloud` resource.
             finalizer::delete(client, &name, &namespace).await?;
             info!("Nextcloud resource: {} deleted", name);
-            Ok(Action::await_change()) // Makes no sense to delete after a successful delete, as the resource is gone
+            //Ok(Action::await_change()) // Makes no sense to delete after a successful delete, as the resource is gone
+            Ok(Action::requeue(Duration::from_secs(10)))
         }
         // The resource is already in desired state, do nothing and re-check after 10 seconds
         NextcloudAction::NoOp => Ok(Action::requeue(Duration::from_secs(10))),
@@ -247,7 +249,7 @@ async fn is_update(nc: &Nextcloud, client: Client) ->
 
 
     // Check hash for both nginx and php separately
-    let new_state_hash = nextcloud::create_hash(&meta.name.as_ref().unwrap(), nc.spec.replicas,
+    let new_state_hash = create_hash(&meta.name.as_ref().unwrap(), nc.spec.replicas,
         nc.spec.php_image.clone());
 
     let current_state_hash: String = annotations.get("state_hash")
@@ -296,6 +298,7 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
             None => info!("😢 No IP available for: {}", pod_name),
         };
 
+        // TODO: Fix unwrap
         pod_status.conditions.clone().unwrap().iter().for_each( move |s| {
                 if s.status == "False" {
                     error!("😢 Condition: {}, Status: {}", s.type_, s.status);
@@ -308,20 +311,25 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
                 }
         });
 
-        pod_status.container_statuses.clone().unwrap().iter().for_each( move |c| {
-            if !c.ready {
-                if let Some(state) = c.state.clone().unwrap().waiting {
-                    let reason = format!("{}, {}",
-                        state.message.unwrap_or("N/A".to_string()),
-                        state.reason.unwrap_or("N/A".to_string())
-                    );
-                    error!("😢 Container: {} not ready, reason: {}", c.name, reason);
+        match pod_status.container_statuses.clone() {
+            Some(s) => s.iter().for_each( move |c| {
+                if !c.ready {
+                    if let Some(state) = c.state.clone().unwrap().waiting {
+                        let reason = format!("{}, {}",
+                            state.message.unwrap_or("N/A".to_string()),
+                            state.reason.unwrap_or("N/A".to_string())
+                        );
+                        error!("😢 Container: {} not ready, reason: {}", c.name, reason);
+                    }
+                } else {
+                    info!("🚀 Container: {} ready to go!", c.name);
                 }
-            } else {
-                info!("🚀 Container: {} ready to go!", c.name);
-            }
 
-        });
+            }),
+            None => info!("Container not ready"),
+        }
+
+
         //info!("Container status: {:?}", pod_status.container_statuses.clone());
     }
     Ok(())
@@ -344,20 +352,4 @@ async fn get_annotations(client: Client, namespace: String) ->
         },
         None => Err("There are no annotations!!!".to_string())
     }
-}
-
-/// All errors possible to occur during reconciliation
-#[derive(Debug, thiserror::Error)]
-pub enum NextcloudError {
-    /// Any error originating from the `kube-rs` crate
-    #[error("Kubernetes reported error: {source}")]
-    KubeError {
-        #[from]
-        source: kube::Error,
-    },
-    /// Error in user input or Nextcloud resource definition, typically missing fields.
-    #[error("Invalid Nextcloud CRD: {0}")]
-    UserInputError(String),
-    #[error("Deploy Nextcloud Error: {0}")]
-    DeployError(String),
 }
