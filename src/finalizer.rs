@@ -44,19 +44,23 @@ pub async fn delete(client: Client, name: &str, namespace: &str) -> Result <(), 
     });
 
     let patch: Patch<&Value> = Patch::Merge(&finalizer);
-    //api.patch(name, &PatchParams::default(), &patch).await
-    let mut params = PatchParams::default();
+    let ret = api.patch(name, &PatchParams::default(), &patch).await?;
+    info!("---- AFTER DELETE COMMAND: {:?}", ret);
+    /*let mut params = PatchParams::default();
     params.field_manager = Some("Nextcloud".to_string());
 
-    info!("CRD {:?}", Nextcloud::crd());
+    //info!("CRD {:?}", Nextcloud::crd());
     let mut nc = Nextcloud::crd();
     nc.metadata.finalizers = None;
 
-    let dp = DeleteParams::default();
+    let dp = DeleteParams::orphan();
     info!("----- Before deleting...");
-    api.delete(name, &dp).await?
+    let ret = api.delete(name, &dp).await?;
+    info!("---- AFTER DELETE COMMAND: {:?}", ret);
+    /*api.delete(name, &dp).await?
         .map_left(|o| println!("Deleting CRD: {:?}", o))
         .map_right(|s| println!("Deleted CRD: {:?}", s));
+    */
+    //api.patch(name, &params.force(), &Patch::Apply(&nc)).await*/
     Ok(())
-    //api.patch(name, &params.force(), &Patch::Apply(&nc)).await
 }
