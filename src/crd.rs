@@ -19,11 +19,22 @@ pub const RESOURCE_NAME: &str = "nextclouds.sotolitolabs.com";
     derive = "PartialEq",
     namespaced
 )]
+#[kube(status = "NextcloudStatus")]
 pub struct NextcloudSpec {
     pub replicas: i32,
     pub php_image: String,
     pub nginx_image: String,
     pub image_pull_secret: String,
+    pub version: String,
+    pub maintenance: bool,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, JsonSchema)]
+pub struct NextcloudStatus {
+    installed: bool,
+    configured: i32,
+    maintenance: bool,
+    last_backup: String,
 }
 
 /// Creates the Nextcloud CRD
@@ -37,7 +48,8 @@ pub async fn create_crd(client: Client) {
         &PatchParams::apply("imcsk8-test"),
         &Patch::Apply(Nextcloud::crd())
     ).await {
-        Ok(r) => info!("{} CRD created {:?}", RESOURCE_NAME, r),
+        //Ok(r) => info!("{} CRD created {:?}", RESOURCE_NAME, r),
+        Ok(r) => info!("{} CRD created", RESOURCE_NAME),
         Err(e) => info!("Error creating {} CRD {:?}!", RESOURCE_NAME, e),
     };
 }
