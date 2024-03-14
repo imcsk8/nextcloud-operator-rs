@@ -111,7 +111,6 @@ enum NextcloudAction {
 async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Result<Action, NextcloudError> {
     let client: Client = context.client.clone(); // The `Client` is shared -> a clone from the reference is obtained
 
-
     info!("----- STATUS? {:?}", nextcloud.status);
 
     // The resource of `Nextcloud` kind is required to have a namespace set. However, it is not guaranteed
@@ -285,8 +284,7 @@ fn on_error(nextcloud: Arc<Nextcloud>, error: &NextcloudError, _context: Arc<Con
 async fn check_component_status(client: Client, namespace: String) -> Result <(), String> {
     let pods: Api<Pod> = Api::namespaced(client.clone(), &namespace);
     let list_params = ListParams::default();
-    //ListParams::default().labels("nextcloud=" + name); // for this app only
-    //for p in pods.list(&list_params).await? {
+
     for p in pods.list(&list_params).await.unwrap() {
         let pod_name = p.name_any();
         info!("Checking pod: {} status", pod_name);
