@@ -19,6 +19,7 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::core::subresource::AttachParams;
 use kube::api::{
     DeleteParams,
@@ -39,6 +40,7 @@ use indoc::formatdoc;
 use tokio::io::{self, BufReader, AsyncReadExt, AsyncBufReadExt};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
+use crate::crd::NextcloudStatus;
 
 
 /// Represents NextCloud deployments
@@ -50,6 +52,7 @@ struct NextcloudElement {
     namespace: String,
     replicas: i32,
     container_port: i32,
+    node_port: Option<i32>,
     labels: BTreeMap<String, String>,
     image_pull_secrets: Vec<LocalObjectReference>,
     annotations: BTreeMap<String, String>,
@@ -173,7 +176,8 @@ impl NextcloudElement {
                         volumes: Some(vec![Volume {
                             name: format!("pv-{}-{}", self.prefix, self.name),
                             persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                                claim_name: format!("pvc-{}-{}", self.prefix, self.name),
+                                //claim_name: format!("pvc-{}-{}", self.prefix, self.name),
+                                claim_name: "pvc-nextcloud-nginx".to_string(),
                                 ..Default::default()
                             }),
                             ..Default::default()
@@ -207,7 +211,9 @@ impl NextcloudElement {
                 type_: Some("LoadBalancer".to_string()),
                 ports: Some(vec![
                     ServicePort {
+                        node_port: self.node_port,
                         port: self.container_port,
+                        target_port: Some(IntOrString::Int(self.container_port)),
                         //TODO: check if we need other protocols
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
@@ -264,6 +270,7 @@ pub async fn apply(
     namespace: &str,
 ) -> Result<(), NextcloudError> {
 
+    let mut global_state_hash = "HASH".to_string();
     info!("Applying Nextcloud elements: {}", name);
     let deployments = vec![
       "php-fpm",
@@ -290,6 +297,7 @@ pub async fn apply(
             namespace: namespace.to_string(),
             replicas: nextcloud_object.spec.replicas, //TODO: should we use different replica size for each deployment?
             container_port: 9000,
+            node_port: Some(30000), // TODO: revisar
             labels: labels.clone(),
             image_pull_secrets: image_pull_secrets.clone(),
             annotations: annotations.clone(),
@@ -301,6 +309,7 @@ pub async fn apply(
             namespace: namespace.to_string(),
             replicas: nextcloud_object.spec.replicas,
             container_port: 80,
+            node_port: Some(30001),
             labels: labels.clone(),
             image_pull_secrets: image_pull_secrets.clone(),
             annotations: annotations.clone(),
@@ -361,7 +370,12 @@ pub async fn apply(
             dep.replicas,
             dep.image.clone()
         );
-        annotations.insert("state_hash".to_owned(), state_hash);
+
+        // state hash
+        annotations.insert("state_hash".to_owned(), state_hash.clone());
+        global_state_hash = format!("{}:{}", global_state_hash, state_hash.clone())
+            .to_owned();
+
         let deployment = dep.as_deployment()?;
         //info!("Deployment: {:?}", &deployment);
 
@@ -385,6 +399,16 @@ pub async fn apply(
         info!("Done applying Service: {}", service_name);
     }
 
+
+    let status = NextcloudStatus {
+        installed: false,
+        configured: 0,
+        maintenance: false,
+        last_backup: "N/A".to_string(),
+        state_hash: global_state_hash,
+    };
+//checar estatus y agregar el nuevo si ha cambiado
+    info!("---- STATUS: {:?}", status);
 
     Ok(())
 }
