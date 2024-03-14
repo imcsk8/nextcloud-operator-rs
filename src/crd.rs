@@ -31,10 +31,11 @@ pub struct NextcloudSpec {
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, JsonSchema)]
 pub struct NextcloudStatus {
-    installed: bool,
-    configured: i32,
-    maintenance: bool,
-    last_backup: String,
+    pub installed: bool,
+    pub configured: i32,
+    pub maintenance: bool,
+    pub last_backup: String,
+    pub state_hash: String,
 }
 
 /// Creates the Nextcloud CRD
