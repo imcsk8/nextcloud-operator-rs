@@ -54,6 +54,7 @@ struct NextcloudElement {
     container_port: i32,
     node_port: Option<i32>,
     labels: BTreeMap<String, String>,
+    selector: BTreeMap<String, String>,
     image_pull_secrets: Vec<LocalObjectReference>,
     annotations: BTreeMap<String, String>,
 }
@@ -88,6 +89,7 @@ impl NextcloudApp for Nextcloud {
         let occ = "/usr/share/nginx/html/occ"; // Hardcoded because we're a particular setup
         //TODO: revisar una manera mas precisa de revisar si nextcloud está instalado
         let installed_command = formatdoc! {"
+    service: BTreeMap<String, String>,
               timeout 10 sudo -u nginx /usr/bin/php {} status | \
               grep installed | cut -d':' -f 2 | sed 's/     //'
         ", occ};
@@ -136,12 +138,14 @@ impl NextcloudElement {
     ///
     pub fn as_deployment(&self) -> Result<Deployment, Error> {
 
+        let mut selector = self.labels.clone();
+        selector.append(&mut self.selector.clone());
         Ok(Deployment {
             metadata: ObjectMeta {
                 name: Some(self.name.to_owned()),
                 namespace: Some(self.namespace.to_owned()),
-                labels: Some(self.labels.clone()),
-                annotations: Some(self.annotations.clone()),
+                    labels: Some(self.labels.clone()),
+                    annotations: Some(self.annotations.clone()),
                 ..ObjectMeta::default()
             },
             spec: Some(DeploymentSpec {
@@ -186,7 +190,7 @@ impl NextcloudElement {
                         ..PodSpec::default()
                     }),
                     metadata: Some(ObjectMeta {
-                        labels: Some(self.labels.clone()),
+                        labels: Some(selector),
                         ..ObjectMeta::default()
                     }),
                 },
@@ -220,7 +224,7 @@ impl NextcloudElement {
                     },
                 // The selector must contain the object labels
                 ]),
-                selector: Some(self.labels.clone()),
+                selector: Some(self.selector.clone()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -277,10 +281,12 @@ pub async fn apply(
       "nginx",
     ];
 
-    let mut labels: BTreeMap<String, String> = BTreeMap::new();
     let mut annotations: BTreeMap<String, String> = BTreeMap::new();
-    labels.insert("app".to_owned(), name.to_owned());
     annotations.insert("installed".to_owned(), "false".to_owned());
+
+    let labels = BTreeMap::from([
+        ("app".to_owned(), name.to_owned()),
+    ]);
 
     info!("---- PULL SECRET? {:?}", nextcloud_object.spec.image_pull_secret.clone());
     let image_pull_secrets = vec![
@@ -299,6 +305,9 @@ pub async fn apply(
             container_port: 9000,
             node_port: Some(30000), // TODO: revisar
             labels: labels.clone(),
+            selector: BTreeMap::from([
+                ("endpoint".to_string(), "php-fpm".to_string())
+            ]),
             image_pull_secrets: image_pull_secrets.clone(),
             annotations: annotations.clone(),
         },
@@ -311,6 +320,9 @@ pub async fn apply(
             container_port: 80,
             node_port: Some(30001),
             labels: labels.clone(),
+            selector: BTreeMap::from([
+                ("endpoint".to_string(), "nginx".to_string())
+            ]),
             image_pull_secrets: image_pull_secrets.clone(),
             annotations: annotations.clone(),
         },
