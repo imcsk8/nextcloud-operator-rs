@@ -3,6 +3,7 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomRe
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use log::{info, debug};
+use std::sync::{Arc, Mutex};
 //use kube::{client::Client, runtime::controller::Action, runtime::Controller, Api};
 
 pub const RESOURCE_NAME: &str = "nextclouds.sotolitolabs.com";
@@ -53,4 +54,20 @@ pub async fn create_crd(client: Client) {
         Ok(r) => info!("{} CRD created", RESOURCE_NAME),
         Err(e) => info!("Error creating {} CRD {:?}!", RESOURCE_NAME, e),
     };
+}
+
+
+/// Trait for Nextcloud object behaviour
+pub trait NextcloudResource {
+    fn status(&mut self, s: NextcloudStatus);
+}
+
+
+/// Implementation for mutable Nextcloud objects
+impl NextcloudResource for Arc<Mutex<Nextcloud>> {
+    fn status(&mut self, s: NextcloudStatus) {
+        let mut nextcloud_inner = self.lock().unwrap();
+        self.status = Some(s);
+        self.unlock();
+    }
 }
