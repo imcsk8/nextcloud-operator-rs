@@ -1,5 +1,6 @@
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
+    ConfigMap,
     Container,
     ContainerPort,
     Pod,
@@ -13,12 +14,21 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaimSpec,
     PersistentVolumeClaimVolumeSource,
     ResourceRequirements,
+    TypedLocalObjectReference,
     Volume,
     VolumeMount,
     //Does not exist VolumeResourceRequirements,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use k8s_openapi::api::networking::v1::{
+    Ingress,
+    IngressBackend,
+    IngressRule,
+    IngressSpec,
+    HTTPIngressPath,
+    HTTPIngressRuleValue,
+};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::core::subresource::AttachParams;
 use kube::api::{
@@ -32,7 +42,7 @@ use kube::api::{
 use kube::{Api, Client, Error, Resource, ResourceExt};
 use std::collections::BTreeMap;
 use crate::Nextcloud;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use log::{info, debug};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -40,8 +50,9 @@ use indoc::formatdoc;
 use tokio::io::{self, BufReader, AsyncReadExt, AsyncBufReadExt};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
-use crate::crd::NextcloudStatus;
+use crate::crd::{NextcloudStatus, NextcloudResource};
 
+static DOCUMENT_ROOT: &str = "/usr/share/nginx/html";
 
 /// Represents NextCloud deployments
 #[derive(Debug)]
@@ -166,7 +177,7 @@ impl NextcloudElement {
                                 }]),
                                 volume_mounts: Some(vec![
                                     VolumeMount {
-                                        mount_path: "/usr/share/nginx/html".to_string(),
+                                        mount_path: DOCUMENT_ROOT.to_string(),
                                         name: format!("pv-{}-{}", self.prefix, self.name),
                                         read_only: Some(false),
                                         ..VolumeMount::default()
@@ -198,6 +209,101 @@ impl NextcloudElement {
             }),
             ..Deployment::default()
         })
+    }
+
+
+    /// Create an ingress object configured to serve the FastCGI protocol
+    pub async fn create_ingress(&self, client: Client) -> Result<(), Error> {
+        // TODO: check return value
+        // Create the ConfigMap object
+        let config_map = ConfigMap {
+            metadata: ObjectMeta {
+                    name: Some(self.name.clone()),
+                    ..Default::default()
+            },
+            data: Some(BTreeMap::from([
+                ("DOCUMENT_ROOT".to_owned(), DOCUMENT_ROOT.to_string()),
+                (
+                    "SCRIPT_FILENAME".to_owned(),
+                    format!("{}$fastcgi_script_name", DOCUMENT_ROOT)
+                ),
+            ])),
+            ..Default::default()
+        };
+
+        let ingress_rule = IngressRule {
+            host: Some("example.com".to_string()),
+            http: Some(HTTPIngressRuleValue {
+                paths: vec![
+                    HTTPIngressPath {
+                        path: Some("/".to_string()),
+                        path_type: "Prefix".to_string(),
+                        backend: IngressBackend {
+                            resource: Some(TypedLocalObjectReference {
+                                api_group: None,
+                                kind: "Service".to_string(),
+                                name: self.name.clone(),
+                            }),
+                            //might need service instead
+                            ..Default::default()
+                        },
+                    }
+                ],
+            }),
+        };
+
+        let ingress = Ingress {
+            metadata: ObjectMeta {
+                name: Some(self.name.clone()),
+                annotations: Some(BTreeMap::from([
+                    (
+                        "nginx.ingress.kubernetes.io/backend-protocol".to_owned(),
+                        "FCGI".to_owned()
+                    ),
+                    (
+                        "nginx.ingress.kubernetes.io/fastcgi-path-info".to_owned(),
+                        "true".to_owned()
+                    ),
+                    (
+                        "nginx.ingress.kubernetes.io/fastcgi-params-configmap".to_owned(),
+                        self.name.clone()
+                    ),
+                ])),
+                ..Default::default()
+            },
+            spec: Some(IngressSpec {
+                ingress_class_name: Some("nginx".to_string()),
+                rules: Some(vec![ingress_rule]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // Create the ConfigMap object
+        let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), self.namespace.as_ref());
+        let patch_params = PatchParams {
+            field_manager: Some("nextcloud_field_manager".to_string()),
+            ..PatchParams::default()
+        };
+        config_maps.patch(
+            self.name.as_str(),
+            &patch_params,
+            &Patch::Apply(&config_map)
+        ).await?;
+
+        // Create the Ingress object
+        let ingresses: Api<Ingress> = Api::namespaced(client.clone(), self.namespace.as_ref());
+        let patch_params = PatchParams {
+            field_manager: Some("nextcloud_field_manager".to_string()),
+            ..PatchParams::default()
+        };
+        ingresses.patch(
+            self.name.as_str(),
+            &patch_params,
+            &Patch::Apply(&ingress)
+        ).await?;
+
+        Ok(())
     }
 
     /// returns a new service for the NextcloudElement object
@@ -270,10 +376,11 @@ impl NextcloudElement {
 pub async fn apply(
     client: Client,
     name: &str,
-    nextcloud_object: Arc<Nextcloud>,
+    nextcloud: Arc<Mutex<Nextcloud>>,
     namespace: &str,
 ) -> Result<(), NextcloudError> {
 
+    let mut nextcloud_object = nextcloud.lock().unwrap();
     let mut global_state_hash = "HASH".to_string();
     info!("Applying Nextcloud elements: {}", name);
     let deployments = vec![
@@ -295,38 +402,37 @@ pub async fn apply(
         },
     ];
 
-    let nextcloud_elements = vec![
-        NextcloudElement {
-            name: "php-fpm".to_string(),
-            prefix: "nextcloud".to_string(),
-            image: nextcloud_object.spec.php_image.clone(),
-            namespace: namespace.to_string(),
-            replicas: nextcloud_object.spec.replicas, //TODO: should we use different replica size for each deployment?
-            container_port: 9000,
-            node_port: Some(30000), // TODO: revisar
-            labels: labels.clone(),
-            selector: BTreeMap::from([
-                ("endpoint".to_string(), "php-fpm".to_string())
-            ]),
-            image_pull_secrets: image_pull_secrets.clone(),
-            annotations: annotations.clone(),
-        },
-        NextcloudElement {
-            name: "nginx".to_string(),
-            prefix: "nextcloud".to_string(),
-            image: nextcloud_object.spec.nginx_image.clone(),
-            namespace: namespace.to_string(),
-            replicas: nextcloud_object.spec.replicas,
-            container_port: 80,
-            node_port: Some(30001),
-            labels: labels.clone(),
-            selector: BTreeMap::from([
-                ("endpoint".to_string(), "nginx".to_string())
-            ]),
-            image_pull_secrets: image_pull_secrets.clone(),
-            annotations: annotations.clone(),
-        },
-    ];
+    let php = NextcloudElement {
+        name: "php-fpm".to_string(),
+        prefix: "nextcloud".to_string(),
+        image: nextcloud_object.spec.php_image.clone(),
+        namespace: namespace.to_string(),
+        replicas: nextcloud_object.spec.replicas, //TODO: should we use different replica size for each deployment?
+        container_port: 9000,
+        node_port: Some(30000), // TODO: revisar
+        labels: labels.clone(),
+        selector: BTreeMap::from([
+            ("endpoint".to_string(), "php-fpm".to_string())
+        ]),
+        image_pull_secrets: image_pull_secrets.clone(),
+        annotations: annotations.clone(),
+    };
+
+    let ingress = NextcloudElement {
+        name: "ingress".to_string(),
+        prefix: "nextcloud".to_string(),
+        image: nextcloud_object.spec.nginx_image.clone(),
+        namespace: namespace.to_string(),
+        replicas: nextcloud_object.spec.replicas,
+        container_port: 80,
+        node_port: Some(30001),
+        labels: labels.clone(),
+        selector: BTreeMap::from([
+            ("endpoint".to_string(), "nginx".to_string())
+        ]),
+        image_pull_secrets: image_pull_secrets.clone(),
+        annotations: annotations.clone(),
+    };
 
     let patch_params = PatchParams {
         field_manager: Some("nextcloud_field_manager".to_string()),
@@ -335,7 +441,7 @@ pub async fn apply(
 
     let list_params = ListParams::default();
     // Use the nginx element
-    let pvc = nextcloud_elements[1].create_pvc()?;
+    let pvc = php.create_pvc()?;
     let pvc_api: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), namespace);
     //let mut pvcs = match pcv_api.list(&list_params).await {
     let pvc_name = match pvc.meta().name.clone() { //TODO: remove unwrap
@@ -375,53 +481,73 @@ pub async fn apply(
     // Create the deployment defined above
     let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
     let service_api: Api<Service> = Api::namespaced(client.clone(), namespace.clone());
-    for dep in nextcloud_elements {
-        //info!("CREATING ELEMENT: {:?}", dep);
-        let state_hash = create_hash(
-            name,
-            dep.replicas,
-            dep.image.clone()
-        );
 
-        // state hash
-        annotations.insert("state_hash".to_owned(), state_hash.clone());
-        global_state_hash = format!("{}:{}", global_state_hash, state_hash.clone())
-            .to_owned();
+    //info!("CREATING ELEMENT: {:?}", dep);
+    let state_hash = create_hash(
+        name,
+        php.replicas,
+        php.image.clone()
+    );
 
-        let deployment = dep.as_deployment()?;
-        //info!("Deployment: {:?}", &deployment);
+    // state hash
+    annotations.insert("state_hash".to_owned(), state_hash.clone());
+    global_state_hash = format!("{}:{}", global_state_hash, state_hash.clone())
+        .to_owned();
 
-        let _ret = deployment_api
-            .patch(&dep.name, &patch_params, &Patch::Apply(&deployment))
-            .await;
-        //info!("RESULT Deployment: {:?}", _ret);
-        info!("Done applying Deployment: {}", dep.name);
-        let service = dep.create_service()?;
-        let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
-        let _result = service_api
-            .patch(
-                service_name.as_str(),
-                &patch_params,
-                &Patch::Apply(&service)
-            )
-            .await?;
+    let deployment = php.as_deployment()?;
+    //info!("Deployment: {:?}", &deployment);
 
-        /*let ret = nextcloud_object.is_installed(client.clone(), "nginx").await;
-        info!("iS INSTALLED: {:?}", ret);*/
-        info!("Done applying Service: {}", service_name);
-    }
+    let _ret = deployment_api
+        .patch(&php.name, &patch_params, &Patch::Apply(&deployment))
+        .await;
+    //info!("RESULT Deployment: {:?}", _ret);
+    info!("Done applying Deployment: {}", php.name);
+    let service = php.create_service()?;
+    let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
+    let _result = service_api
+        .patch(
+            service_name.as_str(),
+            &patch_params,
+            &Patch::Apply(&service)
+        )
+        .await?;
 
+    /*let ret = nextcloud_object.is_installed(client.clone(), "nginx").await;
+    info!("iS INSTALLED: {:?}", ret);*/
+    info!("Done applying Service: {}", service_name);
 
-    let status = NextcloudStatus {
+    // Create ingress
+    ingress.create_ingress(client.clone()).await?;
+    info!("Done applying Ingress: {}", ingress.name);
+
+    //let mut nc = nextcloud_object.clone();
+    nextcloud.status(NextcloudStatus {
         installed: false,
         configured: 0,
         maintenance: false,
         last_backup: "N/A".to_string(),
         state_hash: global_state_hash,
-    };
-//checar estatus y agregar el nuevo si ha cambiado
-    info!("---- STATUS: {:?}", status);
+    });
 
+    let nextclouds: Api<Nextcloud> = Api::namespaced(client.clone(), namespace);
+    let _result = nextclouds
+        .patch(
+            nextcloud_object.meta().name.clone().unwrap().as_str(),
+            &patch_params,
+            &Patch::Apply(&nextcloud_object)
+        )
+        .await?;
+//checar estatus y agregar el nuevo si ha cambiado
+    info!("---- STATUS: {:?}", &nextcloud_object.status);
+
+    // TODO check if we need a success object
+    /*Ok(NextcloudStatus {
+        installed: false,
+        configured: 0,
+        maintenance: false,
+        last_backup: "N/A".to_string(),
+        state_hash: global_state_hash,
+    });*/
     Ok(())
 }
 
