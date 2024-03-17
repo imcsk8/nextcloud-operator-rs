@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::collections::BTreeMap;
 use futures::{pin_mut, TryStreamExt, StreamExt};
 use kube::runtime::watcher::Config;
@@ -108,15 +108,15 @@ enum NextcloudAction {
     NoOp,
 }
 
-async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Result<Action, NextcloudError> {
+async fn reconcile(nextcloud: Arc<Mutex<Nextcloud>>, context: Arc<ContextData>) -> Result<Action, NextcloudError> {
     let client: Client = context.client.clone(); // The `Client` is shared -> a clone from the reference is obtained
-
-    info!("----- STATUS? {:?}", nextcloud.status);
+    let mut nextcloud_inner = nextcloud.lock().unwrap();
+    info!("----- STATUS? {:?}", nextcloud_inner.status);
 
     // The resource of `Nextcloud` kind is required to have a namespace set. However, it is not guaranteed
     // the resource will have a `namespace` set. Therefore, the `namespace` field on object's metadata
     // is optional and Rust forces the programmer to check for it's existence first.
-    let namespace: String = match nextcloud.namespace() {
+    let namespace: String = match nextcloud_inner.namespace() {
         None => {
             // If there is no namespace to deploy to defined, reconciliation ends with an error immediately.
             return Err(NextcloudError::UserInputError(
@@ -126,9 +126,9 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
         }
         Some(namespace) => namespace,
     };
-    let name = nextcloud.name_any(); // Name of the Nextcloud resource is used to name the subresources as well.
+    let name = nextcloud_inner.name_any(); // Name of the Nextcloud resource is used to name the subresources as well.
     info!("Nextcloud resource name: {}", name);
-    info!("Nextcloud resource UUID: {}", nextcloud.uid().unwrap());
+    info!("Nextcloud resource UUID: {}", nextcloud_inner.uid().unwrap());
     info!("Pod List for: {}", name);
     match check_component_status(client.clone(), namespace.clone()).await {
         Ok(c) => info!("Component status ok {:?}", c),
@@ -139,7 +139,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
 
 
     // Performs action as decided by the `determine_action` function.
-    return match determine_action(&nextcloud, client.clone()).await.unwrap() {
+    return match determine_action(&nextcloud_inner, client.clone()).await.unwrap() {
         NextcloudAction::Create | NextcloudAction::Update => {
             // Creates a deployment with `n` Nextcloud service pods, but applies a finalizer first.
             // Finalizer is applied first, as the operator might be shut down and restarted
@@ -154,7 +154,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // deployment with `n` nextcloud service pods.
 
             info!("Creating/Updating php-fpm endpoint");
-            apply(client, &name, nextcloud, &namespace).await?;
+            apply(client, &name, nextcloud.clone(), &namespace).await?;
             Ok(Action::requeue(Duration::from_secs(10)))
         }
         NextcloudAction::Delete => {
@@ -181,6 +181,7 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
         // The resource is already in desired state, do nothing and re-check after 10 seconds
         NextcloudAction::NoOp => Ok(Action::requeue(Duration::from_secs(10))),
     };
+    nextcloud.unlock();
 }
 
 /// Resources arrives into reconciliation queue in a certain state. This function looks at
