@@ -219,6 +219,7 @@ impl NextcloudElement {
         let config_map = ConfigMap {
             metadata: ObjectMeta {
                     name: Some(self.name.clone()),
+                    //name: Some("nextcloud-ingress".to_string()),
                     ..Default::default()
             },
             data: Some(BTreeMap::from([
@@ -232,7 +233,8 @@ impl NextcloudElement {
         };
 
         let ingress_rule = IngressRule {
-            host: Some("example.com".to_string()),
+            //TODO: take from the CRD
+            host: Some("sotolitolabs.com".to_string()),
             http: Some(HTTPIngressRuleValue {
                 paths: vec![
                     HTTPIngressPath {
@@ -255,6 +257,9 @@ impl NextcloudElement {
         let ingress = Ingress {
             metadata: ObjectMeta {
                 name: Some(self.name.clone()),
+                namespace: Some(self.namespace.clone()),
+                labels: Some(self.labels.clone()),
+                //annotations: Some(self.annotations.clone()),
                 annotations: Some(BTreeMap::from([
                     (
                         "nginx.ingress.kubernetes.io/backend-protocol".to_owned(),
@@ -282,6 +287,7 @@ impl NextcloudElement {
         // Create the ConfigMap object
         let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), self.namespace.as_ref());
         let patch_params = PatchParams {
+            //field_manager: Some("nextcloud_field_manager".to_string()),
             field_manager: Some("nextcloud_field_manager".to_string()),
             ..PatchParams::default()
         };
@@ -292,16 +298,22 @@ impl NextcloudElement {
         ).await?;
 
         // Create the Ingress object
+        // NOTE: the ingress controller has to be enabled: minikube addons enable ingress
+        // https://kubernetes.github.io/ingress-nginx/deploy/
         let ingresses: Api<Ingress> = Api::namespaced(client.clone(), self.namespace.as_ref());
-        let patch_params = PatchParams {
-            field_manager: Some("nextcloud_field_manager".to_string()),
+        /*let patch_params = PatchParams {
+            //field_manager: Some("nextcloud_field_manager".to_string()),
+            field_manager: None,
             ..PatchParams::default()
-        };
+        };*/
+        let patch_params = PatchParams::apply("nextcloud_field_manger");
+        info!("----- ANTES DE INGRESS");
         ingresses.patch(
             self.name.as_str(),
             &patch_params,
             &Patch::Apply(&ingress)
         ).await?;
+        info!("----- DESPUES DE INGRESS");
 
         Ok(())
     }
@@ -376,11 +388,12 @@ impl NextcloudElement {
 pub async fn apply(
     client: Client,
     name: &str,
-    nextcloud: Arc<Mutex<Nextcloud>>,
+    nextcloud_object: Arc<Nextcloud>,
     namespace: &str,
-) -> Result<(), NextcloudError> {
+) -> Result<NextcloudStatus, NextcloudError> {
+//) -> Result<(), NextcloudError> {
 
-    let mut nextcloud_object = nextcloud.lock().unwrap();
+    //let mut nextcloud_object = nextcloud.lock().unwrap();
     let mut global_state_hash = "HASH".to_string();
     info!("Applying Nextcloud elements: {}", name);
     let deployments = vec![
@@ -418,8 +431,8 @@ pub async fn apply(
         annotations: annotations.clone(),
     };
 
-    let ingress = NextcloudElement {
-        name: "ingress".to_string(),
+    let nginx = NextcloudElement {
+        name: "nginx".to_string(),
         prefix: "nextcloud".to_string(),
         image: nextcloud_object.spec.nginx_image.clone(),
         namespace: namespace.to_string(),
@@ -494,6 +507,7 @@ pub async fn apply(
     global_state_hash = format!("{}:{}", global_state_hash, state_hash.clone())
         .to_owned();
 
+    // TODO: add a function to create the deployments
     let deployment = php.as_deployment()?;
     //info!("Deployment: {:?}", &deployment);
 
@@ -512,43 +526,43 @@ pub async fn apply(
         )
         .await?;
 
+
+    let deployment = nginx.as_deployment()?;
+    //info!("Deployment: {:?}", &deployment);
+
+    let _ret = deployment_api
+        .patch(&nginx.name, &patch_params, &Patch::Apply(&deployment))
+        .await;
+    //info!("RESULT Deployment: {:?}", _ret);
+    info!("Done applying Deployment: {}", php.name);
+    let service = nginx.create_service()?;
+    let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
+    let _result = service_api
+        .patch(
+            service_name.as_str(),
+            &patch_params,
+            &Patch::Apply(&service)
+        )
+        .await?;
+
     /*let ret = nextcloud_object.is_installed(client.clone(), "nginx").await;
     info!("iS INSTALLED: {:?}", ret);*/
     info!("Done applying Service: {}", service_name);
 
     // Create ingress
-    ingress.create_ingress(client.clone()).await?;
-    info!("Done applying Ingress: {}", ingress.name);
+    //ingress.create_ingress(client.clone()).await?;
+    //info!("Done applying Ingress: {}", ingress.name);
 
-    //let mut nc = nextcloud_object.clone();
-    nextcloud.status(NextcloudStatus {
-        installed: false,
-        configured: 0,
-        maintenance: false,
-        last_backup: "N/A".to_string(),
-        state_hash: global_state_hash,
-    });
-
-    let nextclouds: Api<Nextcloud> = Api::namespaced(client.clone(), namespace);
-    let _result = nextclouds
-        .patch(
-            nextcloud_object.meta().name.clone().unwrap().as_str(),
-            &patch_params,
-            &Patch::Apply(&nextcloud_object)
-        )
-        .await?;
-//checar estatus y agregar el nuevo si ha cambiado
-    info!("---- STATUS: {:?}", &nextcloud_object.status);
+    //checar estatus y agregar el nuevo si ha cambiado
 
     // TODO check if we need a success object
-    /*Ok(NextcloudStatus {
+    Ok(NextcloudStatus {
         installed: false,
         configured: 0,
         maintenance: false,
         last_backup: "N/A".to_string(),
         state_hash: global_state_hash,
-    });*/
-    Ok(())
+    })
 }
 
 /// Deletes an existing deployment.
