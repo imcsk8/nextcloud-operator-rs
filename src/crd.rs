@@ -3,7 +3,8 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomRe
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use log::{info, debug};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+use core::ops::{Deref, DerefMut};
 //use kube::{client::Client, runtime::controller::Action, runtime::Controller, Api};
 
 pub const RESOURCE_NAME: &str = "nextclouds.sotolitolabs.com";
@@ -57,6 +58,65 @@ pub async fn create_crd(client: Client) {
 }
 
 
+// Define a wrapper struct that holds an Arc<Nextcloud>
+pub struct NextcloudWrapper {
+    //TODO: fix this arc inside the mutex
+    //inner: Arc<Mutex<Arc<Nextcloud>>>,
+    inner: Arc<Mutex<Nextcloud>>,
+}
+
+/*
+// Implement Deref for NextcloudWrapper to dereference to Arc<Mutex<Arc<Nextcloud>>>
+impl Deref for NextcloudWrapper {
+    type Target = Arc<Mutex<Arc<Nextcloud>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+*/
+// Implement Deref for NextcloudWrapper to dereference to Arc<Mutex<Nextcloud>>
+impl Deref for NextcloudWrapper {
+    type Target = Arc<Mutex<Nextcloud>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+
+// Implement DerefMut for NextcloudWrapper to dereference mutably to Arc<Mutex<Nextcloud>>
+impl DerefMut for NextcloudWrapper {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+
+struct NextcloudArcWrapper(Arc<Nextcloud>);
+
+
+// Implement Deref for NextcloudWrapper to dereference to Arc<Mutex<Nextcloud>>
+impl Deref for NextcloudArcWrapper {
+    type Target = Arc<Nextcloud>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+
+// Implement DerefMut for NextcloudWrapper to dereference mutably to Arc<Mutex<Nextcloud>>
+impl DerefMut for NextcloudArcWrapper {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+
+
+
+
 /// Trait for Nextcloud object behaviour
 pub trait NextcloudResource {
     fn status(&mut self, s: NextcloudStatus);
@@ -67,7 +127,25 @@ pub trait NextcloudResource {
 impl NextcloudResource for Arc<Mutex<Nextcloud>> {
     fn status(&mut self, s: NextcloudStatus) {
         let mut nextcloud_inner = self.lock().unwrap();
-        self.status = Some(s);
-        self.unlock();
+        nextcloud_inner.status = Some(s);
     }
 }
+
+/*
+/// Implementation for mutable Nextcloud objects
+impl NextcloudResource for Arc<Nextcloud> {
+    fn status(&mut self, s: NextcloudStatus) {
+        let mut nc = self.clone();
+        nc.status = Some(s);
+    }
+}
+*/
+
+
+/// Implementation for mutable Nextcloud objects
+impl NextcloudResource for Nextcloud {
+    fn status(&mut self, s: NextcloudStatus) {
+        self.status = Some(s);
+    }
+}
+
