@@ -10,8 +10,7 @@ use kube::{
     runtime::Controller,
     runtime::{watcher, WatchStreamExt},
     Api,
-    api::WatchEvent,
-    api::ListParams,
+    api::{WatchEvent, ListParams, Patch, PatchParams}
 };
 
 use futures::stream::Stream;
@@ -26,7 +25,7 @@ use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 
 #[macro_use] extern crate log;
 
-use crate::crd::{Nextcloud, create_crd};
+use crate::crd::{Nextcloud, NextcloudWrapper, NextcloudResource, create_crd};
 use nextcloud::*;
 
 pub mod crd;
@@ -108,15 +107,14 @@ enum NextcloudAction {
     NoOp,
 }
 
-async fn reconcile(nextcloud: Arc<Mutex<Nextcloud>>, context: Arc<ContextData>) -> Result<Action, NextcloudError> {
+async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Result<Action, NextcloudError> {
     let client: Client = context.client.clone(); // The `Client` is shared -> a clone from the reference is obtained
-    let mut nextcloud_inner = nextcloud.lock().unwrap();
-    info!("----- STATUS? {:?}", nextcloud_inner.status);
+    info!("----- STATUS? {:?}", nextcloud.status);
 
     // The resource of `Nextcloud` kind is required to have a namespace set. However, it is not guaranteed
     // the resource will have a `namespace` set. Therefore, the `namespace` field on object's metadata
     // is optional and Rust forces the programmer to check for it's existence first.
-    let namespace: String = match nextcloud_inner.namespace() {
+    let namespace: String = match nextcloud.namespace() {
         None => {
             // If there is no namespace to deploy to defined, reconciliation ends with an error immediately.
             return Err(NextcloudError::UserInputError(
@@ -126,9 +124,9 @@ async fn reconcile(nextcloud: Arc<Mutex<Nextcloud>>, context: Arc<ContextData>) 
         }
         Some(namespace) => namespace,
     };
-    let name = nextcloud_inner.name_any(); // Name of the Nextcloud resource is used to name the subresources as well.
+    let name = nextcloud.name_any(); // Name of the Nextcloud resource is used to name the subresources as well.
     info!("Nextcloud resource name: {}", name);
-    info!("Nextcloud resource UUID: {}", nextcloud_inner.uid().unwrap());
+    info!("Nextcloud resource UUID: {}", nextcloud.uid().unwrap());
     info!("Pod List for: {}", name);
     match check_component_status(client.clone(), namespace.clone()).await {
         Ok(c) => info!("Component status ok {:?}", c),
@@ -139,7 +137,7 @@ async fn reconcile(nextcloud: Arc<Mutex<Nextcloud>>, context: Arc<ContextData>) 
 
 
     // Performs action as decided by the `determine_action` function.
-    return match determine_action(&nextcloud_inner, client.clone()).await.unwrap() {
+    return match determine_action(&nextcloud, client.clone()).await.unwrap() {
         NextcloudAction::Create | NextcloudAction::Update => {
             // Creates a deployment with `n` Nextcloud service pods, but applies a finalizer first.
             // Finalizer is applied first, as the operator might be shut down and restarted
@@ -154,7 +152,59 @@ async fn reconcile(nextcloud: Arc<Mutex<Nextcloud>>, context: Arc<ContextData>) 
             // deployment with `n` nextcloud service pods.
 
             info!("Creating/Updating php-fpm endpoint");
-            apply(client, &name, nextcloud.clone(), &namespace).await?;
+            //let wrapped_nextcloud = Arc::new(Mutex::new(Arc::<Nextcloud>::get_mut(tmp_nextcloud).unwrap()));
+            //let mut wrapped_nextcloud = Arc::new(Mutex::new(Arc::<Nextcloud>::get(tmp_nextcloud).unwrap()));
+            /*let new_status = apply(client.clone(), &name, nextcloud.clone(), &namespace).await?;
+
+            info!("---- STATUS: {:?}", &new_status);
+            {
+                let inner_nextcloud = nextcloud.clone();
+                let wrapped_nextcloud = Arc::new(Mutex::new(*inner_nextcloud.clone()));
+                let wrapper = NextcloudWrapper { inner: wrapped_nextcloud };
+                let mut locked_nextcloud = wrapper.lock().unwrap();
+                //wrapped_nextcloud.status(status);
+                locked_nextcloud.status = Some(new_status);
+            */
+                let new_status = apply(client.clone(), &name, nextcloud.clone(), &namespace).await?;
+                let nextclouds: Api<Nextcloud> = Api::namespaced(client.clone(), &namespace);
+                let patch_params = PatchParams {
+                    field_manager: Some("nextcloud_field_manager".to_string()),
+                    ..PatchParams::default()
+                };
+
+                //let nc_mutex: Arc<Mutex<Nextcloud>> = Arc::new(Mutex::new(Arc::try_unwrap(nextcloud).unwrap().into_inner()));
+                {
+                //let nc_mutex: Arc<Mutex<Nextcloud>> = Arc::new(Mutex::new(Arc::try_unwrap(nextcloud.clone()).unwrap()));
+                //TODO: check why this returns the object even on error
+                /*let inner_nc = match Arc::try_unwrap(nextcloud.clone()) {
+                    Ok(n)  => n,
+                    Err(e) => {
+                        info!("---- WTF ERROR!!! {:?}", e);
+                        e
+                    }
+
+                };*/
+                let inner_nc = Nextcloud {
+                    metadata: nextcloud.meta().clone(),
+                    spec: nextcloud.spec.clone(),
+                    status: Some(new_status.clone())
+                };
+                let nc_mutex: Arc<Mutex<Nextcloud>> = Arc::new(Mutex::new(inner_nc));
+                let mut locked_nextcloud = nc_mutex.lock().unwrap();
+                //locked_nextcloud.status(new_status);
+                locked_nextcloud.status=Some(new_status);
+                }
+                let _result = nextclouds
+                    .patch(
+                        nextcloud.meta().name.clone().unwrap().as_str(),
+                        &patch_params,
+                        &Patch::Apply(&*nextcloud)
+                    )
+                .await?;
+            //};
+
+
+
             Ok(Action::requeue(Duration::from_secs(10)))
         }
         NextcloudAction::Delete => {
@@ -181,7 +231,7 @@ async fn reconcile(nextcloud: Arc<Mutex<Nextcloud>>, context: Arc<ContextData>) 
         // The resource is already in desired state, do nothing and re-check after 10 seconds
         NextcloudAction::NoOp => Ok(Action::requeue(Duration::from_secs(10))),
     };
-    nextcloud.unlock();
+        //not needed Mutex::<Nextcloud>::unlock(self);
 }
 
 /// Resources arrives into reconciliation queue in a certain state. This function looks at
@@ -298,7 +348,14 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
         };
 
         // TODO: Fix unwrap
-        pod_status.conditions.clone().unwrap().iter().for_each( move |s| {
+        let conditions = match pod_status.conditions.clone() {
+            Some(c) => c,
+            None    => {
+                return Err("No conditions available".to_string());
+            }
+        };
+
+        conditions.iter().for_each( move |s| {
                 if s.status == "False" {
                     error!("😢 Condition: {}, Status: {}", s.type_, s.status);
                     error!("😢 Reason: {}, Message: {}",
