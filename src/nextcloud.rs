@@ -3,6 +3,8 @@ use k8s_openapi::api::core::v1::{
     ConfigMap,
     Container,
     ContainerPort,
+    ConfigMapVolumeSource,
+	KeyToPath,
     Pod,
     PodSpec,
     PodTemplateSpec,
@@ -68,6 +70,8 @@ struct NextcloudElement {
     selector: BTreeMap<String, String>,
     image_pull_secrets: Vec<LocalObjectReference>,
     annotations: BTreeMap<String, String>,
+    volumes: Vec<Volume>,
+    volume_mounts: Vec<VolumeMount>,
 }
 
 /// All errors possible to occur during reconciliation
@@ -148,15 +152,14 @@ impl NextcloudElement {
     /// - `namespace` - Namespace to create the Kubernetes Deployment in.
     ///
     pub fn as_deployment(&self) -> Result<Deployment, Error> {
-
         let mut selector = self.labels.clone();
         selector.append(&mut self.selector.clone());
         Ok(Deployment {
             metadata: ObjectMeta {
                 name: Some(self.name.to_owned()),
                 namespace: Some(self.namespace.to_owned()),
-                    labels: Some(self.labels.clone()),
-                    annotations: Some(self.annotations.clone()),
+                labels: Some(self.labels.clone()),
+                annotations: Some(self.annotations.clone()),
                 ..ObjectMeta::default()
             },
             spec: Some(DeploymentSpec {
@@ -175,28 +178,11 @@ impl NextcloudElement {
                                     container_port: self.container_port,
                                     ..ContainerPort::default()
                                 }]),
-                                volume_mounts: Some(vec![
-                                    VolumeMount {
-                                        mount_path: DOCUMENT_ROOT.to_string(),
-                                        name: format!("pv-{}-{}", self.prefix, self.name),
-                                        read_only: Some(false),
-                                        ..VolumeMount::default()
-                                    }
-
-                                ]),
+                                volume_mounts: Some(self.volume_mounts.clone()),
                             ..Container::default()
                             },
                         ],
-
-                        volumes: Some(vec![Volume {
-                            name: format!("pv-{}-{}", self.prefix, self.name),
-                            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                                //claim_name: format!("pvc-{}-{}", self.prefix, self.name),
-                                claim_name: "pvc-nextcloud-nginx".to_string(),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }]),
+                        volumes: Some(self.volumes.clone()),
                         image_pull_secrets: Some(self.image_pull_secrets.clone()),
                         ..PodSpec::default()
                     }),
@@ -383,6 +369,66 @@ impl NextcloudElement {
             }
         )
     }
+
+
+    /// Add a volume from a configmap to be mounted on the container
+    /// Arguments:
+    /// config_map: Name of the config map
+    /// name: Name of the volume
+    fn add_config_volume(&mut self, config_map: String, name: String, )
+        -> Result<(), Error> {
+        self.volumes.push(Volume {
+            name: name,
+            config_map: Some(ConfigMapVolumeSource {
+                name: Some(config_map),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        // TODO: add proper error management
+        Ok(())
+    }
+
+
+    /// Add a volume from a persistent volume claim
+    /// Arguments
+    /// pvc_name: Name of the PersistentVolumeClaim
+    /// name: Name of the Volume
+    fn add_pvc_volume(&mut self, pvc_name: String, name: String)
+        -> Result<(), Error> {
+        self.volumes.push(Volume {
+            name: name.clone(),
+            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                claim_name: pvc_name.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        // TODO: add proper error management
+        Ok(())
+    }
+
+    /// Add a volume mount for the container
+    /// Arguments:
+    /// name: name of the Volume to mount
+    /// mount_path: path where the Volume is going to mount inside the container
+    /// read_only: true if the volume is read only
+    fn add_volume_mount(
+        &mut self,
+        name: String,
+        mount_path: String,
+        read_only: bool)
+        -> Result<(), Error> {
+        // Define the volume mount for the ConfigMap
+        self.volume_mounts.push(VolumeMount {
+            name: name,
+            mount_path: mount_path,
+            read_only: Some(read_only),
+            ..Default::default()
+        });
+        // TODO: add proper error management
+        Ok(())
+    }
 }
 
 pub async fn apply(
@@ -415,7 +461,7 @@ pub async fn apply(
         },
     ];
 
-    let php = NextcloudElement {
+    let mut php = NextcloudElement {
         name: "php-fpm".to_string(),
         prefix: "nextcloud".to_string(),
         image: nextcloud_object.spec.php_image.clone(),
@@ -429,9 +475,11 @@ pub async fn apply(
         ]),
         image_pull_secrets: image_pull_secrets.clone(),
         annotations: annotations.clone(),
+        volumes: Vec::new(),
+        volume_mounts: Vec::new(),
     };
 
-    let nginx = NextcloudElement {
+    let mut nginx = NextcloudElement {
         name: "nginx".to_string(),
         prefix: "nextcloud".to_string(),
         image: nextcloud_object.spec.nginx_image.clone(),
@@ -445,6 +493,8 @@ pub async fn apply(
         ]),
         image_pull_secrets: image_pull_secrets.clone(),
         annotations: annotations.clone(),
+        volumes: Vec::new(),
+        volume_mounts: Vec::new(),
     };
 
     let patch_params = PatchParams {
@@ -507,14 +557,30 @@ pub async fn apply(
     global_state_hash = format!("{}:{}", global_state_hash, state_hash.clone())
         .to_owned();
 
-    // TODO: add a function to create the deployments
-    let deployment = php.as_deployment()?;
-    //info!("Deployment: {:?}", &deployment);
+    // Volumes
+    let pvc_volume_name = "pvc-nextcloud-nginx".to_string();
+    php.add_pvc_volume(pvc_volume_name.clone(), nginx.name.clone());
+    nginx.add_pvc_volume(pvc_volume_name.clone(), nginx.name.clone());
+    php.add_config_volume("php-www".to_string(), "php-www".to_string());
+    php.add_volume_mount("php-www".to_string(),
+        "/etc/php-fpm.d/".to_string(), true);
+    php.add_volume_mount(nginx.name.clone(),
+        DOCUMENT_ROOT.to_string(), false);
+    nginx.add_volume_mount(nginx.name.clone(),
+        DOCUMENT_ROOT.to_string(), false);
 
-    let _ret = deployment_api
+    info!("nginx deployment: {:?}", nginx.volume_mounts);
+
+
+    let deployment = php.as_deployment()?;
+
+    //info!("PHP deployment: {:?}", &deployment);
+
+    //let _ret = deployment_api
+    deployment_api
         .patch(&php.name, &patch_params, &Patch::Apply(&deployment))
-        .await;
-    //info!("RESULT Deployment: {:?}", _ret);
+        .await?;
+    //info!("RESULT PHP Deployment: {:?}", _ret);
     info!("Done applying Deployment: {}", php.name);
     let service = php.create_service()?;
     let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
@@ -526,15 +592,15 @@ pub async fn apply(
         )
         .await?;
 
-
     let deployment = nginx.as_deployment()?;
     //info!("Deployment: {:?}", &deployment);
 
-    let _ret = deployment_api
+    //let _ret = deployment_api
+    deployment_api
         .patch(&nginx.name, &patch_params, &Patch::Apply(&deployment))
-        .await;
-    //info!("RESULT Deployment: {:?}", _ret);
-    info!("Done applying Deployment: {}", php.name);
+        .await?;
+    //info!("RESULT nginx Deployment: {:?}", _ret);
+    info!("Done nginx applying Deployment: {}", nginx.name);
     let service = nginx.create_service()?;
     let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
     let _result = service_api
