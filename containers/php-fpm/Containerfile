@@ -1,9 +1,10 @@
-FROM  quay.io/centos/centos:stream9-minimal
+FROM  quay.io/centos/centos:stream9
 MAINTAINER Iván Chavero <ichavero@chavero.com.mx>
 
-ENV PHP_FPM_VERSION="8.2.15"            \
+ENV PHP_FPM_VERSION="8.2.17"            \
     SUMMARY="php-fpm for nextcloud"     \
-    DESCRIPTION="php-fpm for nextcloud"
+    DESCRIPTION="php-fpm for nextcloud" \
+    NEXTCLOUD_ENV="production"
 
 
 LABEL summary="$SUMMARY"                                  \
@@ -13,49 +14,54 @@ LABEL summary="$SUMMARY"                                  \
       io.openshift.expose-services=""                     \
       io.openshift.tags="php-fpm nextclou"                \
       name="nextcloud-php-fpm"                            \
-      version="8.2.15"                                    \
+      version="8.2.17"                                    \
       usage="podman run -d -e -p nextcloud-php-fpm"       \
       maintainer="Iván Chavero <ichavero@chavero.com.mx>"
 
 
-RUN microdnf install -y epel-release && \
-  microdnf install --enablerepo=crb -y  libmemcached-awesome \
-  php-fpm            \
-  php-pear           \
-  php-cli            \
-  php-curl           \
-  php-dom            \
-  php-exif           \
-  php-fileinfo       \
-  php-gd             \
-  php-iconv          \
-  php-json           \
-  php-ldap           \
-  php-mbstring       \
-  php-openssl        \
-  php-pcre           \
-  php-pdo            \
-  php-session        \
-  php-simplexml      \
-  php-xmlwriter      \
-  php-spl            \
-  php-zip            \
-  php-filter         \
-  php-ldap           \
-  php-smbclient      \
-  php-gmp            \
-  php-process        \
-  php-pecl-imagick   \
-  php-pecl-memcached \
-  php-pecl-apcu      \
-  php-pecl-redis5    \
-  php-fpm            \
-  php-fpm            \
-  php-mysqlnd        \
+RUN dnf install -y epel-release && \
+  crb enable                    && \
+  rpm --import https://rpms.remirepo.net/enterprise/9/RPM-GPG-KEY-remi   && \
+  dnf install -y https://rpms.remirepo.net/enterprise/remi-release-9.rpm && \
+  dnf -y module reset php                                                && \
+  dnf -y module install php:remi-8.2                                     && \
+  dnf install -y --enablerepo=crb libmemcached-awesome                      \
+  php-fpm-$PHP_FPM_VERSION                                                  \
+  php-pear                                                                  \
+  php-cli                                                                   \
+  php-curl                                                                  \
+  php-dom                                                                   \
+  php-exif                                                                  \
+  php-fileinfo                                                              \
+  php-gd                                                                    \
+  php-iconv                                                                 \
+  php-json                                                                  \
+  php-ldap                                                                  \
+  php-mbstring                                                              \
+  php-openssl                                                               \
+  php-pcre                                                                  \
+  php-pdo                                                                   \
+  php-session                                                               \
+  php-simplexml                                                             \
+  php-xmlwriter                                                             \
+  php-spl                                                                   \
+  php-zip                                                                   \
+  php-filter                                                                \
+  php-ldap                                                                  \
+  php-smbclient                                                             \
+  php-gmp                                                                   \
+  php-process                                                               \
+  php-pecl-imagick                                                          \
+  php-pecl-memcached                                                        \
+  php-pecl-apcu                                                             \
+  php-pecl-redis5                                                           \
+  php-fpm                                                                   \
+  php-fpm                                                                   \
+  php-mysqlnd                                                               \
   php-pgsql                              && \
   mkdir -p /run/php-fpm/                 && \
   rm -rf /usr/share/icons /usr/share/doc && \
-  microdnf clean all
+  dnf clean all
 
 COPY files/www.conf /etc/php-fpm.d/www.conf
 
