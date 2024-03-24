@@ -30,3 +30,4 @@ thiserror = "1"    # Custom Error definitions and convenient error mappings
 crypto = "0.5.1"
 sha2 = "0.10.8"
 indoc = "2.0.4"
+tokio-util = "0.7.10"
