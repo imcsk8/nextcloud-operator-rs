@@ -4,7 +4,7 @@ use k8s_openapi::api::core::v1::{
     Container,
     ContainerPort,
     ConfigMapVolumeSource,
-	KeyToPath,
+    KeyToPath,
     Pod,
     PodSpec,
     PodTemplateSpec,
@@ -50,6 +50,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use indoc::formatdoc;
 use tokio::io::{self, BufReader, AsyncReadExt, AsyncBufReadExt};
+use tokio_util::io::ReaderStream;
+use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 use crate::crd::{NextcloudStatus, NextcloudResource};
@@ -169,6 +171,13 @@ impl NextcloudElement {
                     match_labels: Some(self.labels.clone()),
                 },
                 template: PodTemplateSpec {
+                    metadata: Some(ObjectMeta {
+                        name: Some(self.name.to_owned()),
+                        namespace: Some(self.namespace.to_owned()),
+                        labels: Some(selector.clone()),
+                        annotations: Some(self.annotations.clone()),
+                        ..ObjectMeta::default()
+                    }),
                     spec: Some(PodSpec {
                         containers: vec![
                             Container {
@@ -185,10 +194,6 @@ impl NextcloudElement {
                         volumes: Some(self.volumes.clone()),
                         image_pull_secrets: Some(self.image_pull_secrets.clone()),
                         ..PodSpec::default()
-                    }),
-                    metadata: Some(ObjectMeta {
-                        labels: Some(selector),
-                        ..ObjectMeta::default()
                     }),
                 },
                 ..DeploymentSpec::default()
@@ -312,7 +317,9 @@ impl NextcloudElement {
                 name: Some(format!("service-{}-{}", self.prefix, self.name)),
                 namespace: Some(self.namespace.to_owned()),
                 labels: Some(self.labels.clone()),
-                annotations: Some(self.annotations.clone()),
+                //annotations: Some(self.annotations.clone()),
+                //TODO: add labes to selectors
+                annotations: Some(self.selector.clone()),
                 ..ObjectMeta::default()
             },
             spec: Some(ServiceSpec {
@@ -429,8 +436,37 @@ impl NextcloudElement {
         // TODO: add proper error management
         Ok(())
     }
+
+
+    /// Executes a command and returns the output as a string
+    async fn exec(&self, client: Client, command: Vec<&str>)
+        -> Result<String, NextcloudError> {
+        let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
+        let lp = ListParams::default().labels("endpoint=php-fpm");
+        let pod =  pods.list(&lp).await?.items[0].clone();
+        let pod_name = pod.name_any();
+        info!("Executing command on pod: {}", &pod_name);
+        let mut attached = pods
+            .exec(
+                &pod_name,
+                command,
+                &AttachParams::default().stdout(true),
+            )
+            .await?;
+        let stdout = ReaderStream::new(attached.stdout().unwrap());
+        let out = stdout
+            .filter_map(|r| async { r.ok().and_then(|v| String::from_utf8(v.to_vec()).ok()) })
+            .collect::<Vec<_>>()
+            .await
+            .join("");
+        info!("Output: {}", out);
+        attached.join().await.unwrap();
+        Ok(out.to_string())
+    }
 }
 
+
+/// Apply the changes
 pub async fn apply(
     client: Client,
     name: &str,
@@ -614,6 +650,14 @@ pub async fn apply(
     /*let ret = nextcloud_object.is_installed(client.clone(), "nginx").await;
     info!("iS INSTALLED: {:?}", ret);*/
     info!("Done applying Service: {}", service_name);
+
+    let output = match php.exec(
+        client.clone(),
+        vec!["ls", "-la", "/usr/share/nginx/html"])
+        .await {
+        Ok(o)  => {info!("--- EXEC output: {}", o);}
+        Err(e) => {info!("--- ERROR EXEC!: {:?}", e);}
+    };
 
     // Create ingress
     //ingress.create_ingress(client.clone()).await?;
