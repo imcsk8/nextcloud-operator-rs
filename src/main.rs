@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 use std::collections::BTreeMap;
-use futures::{pin_mut, TryStreamExt, StreamExt};
+use futures::{StreamExt};
 use kube::runtime::watcher::Config;
 use kube::Resource;
 use kube::ResourceExt;
@@ -8,27 +8,26 @@ use kube::{
     client::Client,
     runtime::controller::Action,
     runtime::Controller,
-    runtime::{watcher, WatchStreamExt},
     Api,
-    api::{WatchEvent, ListParams, Patch, PatchParams}
+    api::{ListParams, Patch, PatchParams}
 };
 
-use futures::stream::Stream;
-//use kube_runtime::watcher;
 use k8s_openapi::api::core::v1::Pod;
-use k8s_openapi::api::events::v1::Event;
 use tokio::time::Duration;
 use kube::runtime::controller::Error as KubeContError;
-//use log::{info, debug};
 use pretty_env_logger;
-use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+use k8s_openapi::api::apps::v1::{Deployment};
 
 #[macro_use] extern crate log;
 
-use crate::crd::{Nextcloud, NextcloudWrapper, NextcloudResource, create_crd};
+use crate::crd::{Nextcloud, NextcloudResource, create_crd};
 use nextcloud::*;
+use crate::error::*;
 
 pub mod crd;
+mod element;
+mod error;
+mod ingress;
 mod nextcloud;
 mod finalizer;
 
