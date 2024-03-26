@@ -64,6 +64,7 @@ RUN dnf install -y epel-release && \
   tar                                                                       \
   tcpdump                                                                   \
   strace                                                                    \
+  bzip2                                                                     \
   vim-enhanced                           && \
   mkdir -p /run/php-fpm/                 && \
   rm -rf /usr/share/icons /usr/share/doc && \
