@@ -1,4 +1,3 @@
-use kube::{Error};
 use thiserror::Error;
 
 /// All errors possible to occur during reconciliation
