@@ -1,8 +1,7 @@
 use crate::crd::Nextcloud;
-use kube::api::{Patch, PatchParams, DeleteParams};
+use kube::api::{Patch, PatchParams};
 use kube::{Api, Client, Error};
 use serde_json::{json, Value};
-use kube::CustomResourceExt;
 
 /// Adds a finalizer record into an `Echo` kind of resource. If the finalizer already exists,
 /// this action has no effect.
