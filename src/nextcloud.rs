@@ -1,61 +1,24 @@
-use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+use k8s_openapi::api::apps::v1::{Deployment};
 use k8s_openapi::api::core::v1::{
-    ConfigMap,
-    Container,
-    ContainerPort,
-    ConfigMapVolumeSource,
-    KeyToPath,
-    Pod,
-    PodSpec,
-    PodTemplateSpec,
     LocalObjectReference,
-    Service,
-    ServiceSpec,
-    ServicePort,
     PersistentVolumeClaim,
-    PersistentVolumeClaimSpec,
-    PersistentVolumeClaimVolumeSource,
-    ResourceRequirements,
-    TypedLocalObjectReference,
-    Volume,
-    VolumeMount,
-    //Does not exist VolumeResourceRequirements,
+    Service,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
-use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::api::networking::v1::{
-    Ingress,
-    IngressBackend,
-    IngressRule,
-    IngressSpec,
-    HTTPIngressPath,
-    HTTPIngressRuleValue,
-};
-use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
-use kube::core::subresource::AttachParams;
 use kube::api::{
     DeleteParams,
-    ObjectMeta,
-    PostParams,
     Patch,
     PatchParams,
     ListParams,
 };
-use kube::{Api, Client, Error, Resource, ResourceExt};
+use kube::{Api, Client, Error, Resource};
 use std::collections::BTreeMap;
 use crate::Nextcloud;
-use std::sync::{Arc, Mutex};
-use log::{info, debug};
+use std::sync::{Arc};
+use log::{info};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
-use indoc::formatdoc;
-use tokio::io::{self, BufReader, AsyncReadExt, AsyncBufReadExt};
-use tokio_util::io::ReaderStream;
 use futures::StreamExt;
-use serde::de::DeserializeOwned;
-use std::fmt::Debug;
 // Local modules
-use crate::crd::{NextcloudStatus, NextcloudResource};
+use crate::crd::{NextcloudStatus};
 use crate::element::*;
 use crate::error::{NextcloudError};
 use crate::ingress::*;
