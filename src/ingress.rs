@@ -8,12 +8,9 @@ use k8s_openapi::api::networking::v1::{
 };
 use kube::Api;
 use kube::api::{
-    DeleteParams,
     ObjectMeta,
-    PostParams,
     Patch,
     PatchParams,
-    ListParams,
 };
 use k8s_openapi::api::core::v1::{
     ConfigMap,
