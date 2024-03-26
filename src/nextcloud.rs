@@ -54,43 +54,11 @@ use tokio_util::io::ReaderStream;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
+// Local modules
 use crate::crd::{NextcloudStatus, NextcloudResource};
-
-static DOCUMENT_ROOT: &str = "/usr/share/nginx/html";
-
-/// Represents NextCloud deployments
-#[derive(Debug)]
-struct NextcloudElement {
-    name: String,
-    prefix: String,
-    image: String,
-    namespace: String,
-    replicas: i32,
-    container_port: i32,
-    node_port: Option<i32>,
-    labels: BTreeMap<String, String>,
-    selector: BTreeMap<String, String>,
-    image_pull_secrets: Vec<LocalObjectReference>,
-    annotations: BTreeMap<String, String>,
-    volumes: Vec<Volume>,
-    volume_mounts: Vec<VolumeMount>,
-}
-
-/// All errors possible to occur during reconciliation
-#[derive(Debug, Error)]
-pub enum NextcloudError {
-    /// Any error originating from the `kube-rs` crate
-    #[error("Kubernetes reported error: {source}")]
-    KubeError {
-        #[from]
-        source: kube::Error,
-    },
-    /// Error in user input or Nextcloud resource definition, typically missing fields.
-    #[error("Invalid Nextcloud CRD: {0}")]
-    UserInputError(String),
-    #[error("Deploy Nextcloud Error: {0}")]
-    DeployError(String),
-}
+use crate::element::*;
+use crate::error::{NextcloudError};
+use crate::ingress::*;
 
 /// Nextcloud application management<
 /*pub trait NextcloudApp {
@@ -141,331 +109,6 @@ impl NextcloudApp for Nextcloud {
 
 */
 
-/// NextcloudElement implementation
-impl NextcloudElement {
-
-    /// returns a new deployment of `n` pods with the `imcsk8/nextcloud:latest` docker image inside,
-    /// where `n` is the number of `replicas` given.
-    ///
-    /// # Arguments
-    /// - `client` - A Kubernetes client to create the deployment with.
-    /// - `name` - Name of the deployment to be created
-    /// - `replicas` - Number of pod replicas for the Deployment to contain
-    /// - `namespace` - Namespace to create the Kubernetes Deployment in.
-    ///
-    pub fn as_deployment(&self) -> Result<Deployment, Error> {
-        let mut selector = self.labels.clone();
-        selector.append(&mut self.selector.clone());
-        Ok(Deployment {
-            metadata: ObjectMeta {
-                name: Some(self.name.to_owned()),
-                namespace: Some(self.namespace.to_owned()),
-                labels: Some(self.labels.clone()),
-                annotations: Some(self.annotations.clone()),
-                ..ObjectMeta::default()
-            },
-            spec: Some(DeploymentSpec {
-                replicas: Some(self.replicas),
-                selector: LabelSelector {
-                    match_expressions: None,
-                    match_labels: Some(self.labels.clone()),
-                },
-                template: PodTemplateSpec {
-                    metadata: Some(ObjectMeta {
-                        name: Some(self.name.to_owned()),
-                        namespace: Some(self.namespace.to_owned()),
-                        labels: Some(selector.clone()),
-                        annotations: Some(self.annotations.clone()),
-                        ..ObjectMeta::default()
-                    }),
-                    spec: Some(PodSpec {
-                        containers: vec![
-                            Container {
-                                name: format!("{}-{}", self.prefix, self.name).to_string(),
-                                image: Some(self.image.clone()),
-                                ports: Some(vec![ContainerPort {
-                                    container_port: self.container_port,
-                                    ..ContainerPort::default()
-                                }]),
-                                volume_mounts: Some(self.volume_mounts.clone()),
-                            ..Container::default()
-                            },
-                        ],
-                        volumes: Some(self.volumes.clone()),
-                        image_pull_secrets: Some(self.image_pull_secrets.clone()),
-                        ..PodSpec::default()
-                    }),
-                },
-                ..DeploymentSpec::default()
-            }),
-            ..Deployment::default()
-        })
-    }
-
-
-    /// Create an ingress object configured to serve the FastCGI protocol
-    pub async fn create_ingress(&self, client: Client) -> Result<(), Error> {
-        // TODO: check return value
-        // Create the ConfigMap object
-        let config_map = ConfigMap {
-            metadata: ObjectMeta {
-                    name: Some(self.name.clone()),
-                    //name: Some("nextcloud-ingress".to_string()),
-                    ..Default::default()
-            },
-            data: Some(BTreeMap::from([
-                ("DOCUMENT_ROOT".to_owned(), DOCUMENT_ROOT.to_string()),
-                (
-                    "SCRIPT_FILENAME".to_owned(),
-                    format!("{}$fastcgi_script_name", DOCUMENT_ROOT)
-                ),
-            ])),
-            ..Default::default()
-        };
-
-        let ingress_rule = IngressRule {
-            //TODO: take from the CRD
-            host: Some("sotolitolabs.com".to_string()),
-            http: Some(HTTPIngressRuleValue {
-                paths: vec![
-                    HTTPIngressPath {
-                        path: Some("/".to_string()),
-                        path_type: "Prefix".to_string(),
-                        backend: IngressBackend {
-                            resource: Some(TypedLocalObjectReference {
-                                api_group: None,
-                                kind: "Service".to_string(),
-                                name: self.name.clone(),
-                            }),
-                            //might need service instead
-                            ..Default::default()
-                        },
-                    }
-                ],
-            }),
-        };
-
-        let ingress = Ingress {
-            metadata: ObjectMeta {
-                name: Some(self.name.clone()),
-                namespace: Some(self.namespace.clone()),
-                labels: Some(self.labels.clone()),
-                //annotations: Some(self.annotations.clone()),
-                annotations: Some(BTreeMap::from([
-                    (
-                        "nginx.ingress.kubernetes.io/backend-protocol".to_owned(),
-                        "FCGI".to_owned()
-                    ),
-                    (
-                        "nginx.ingress.kubernetes.io/fastcgi-path-info".to_owned(),
-                        "true".to_owned()
-                    ),
-                    (
-                        "nginx.ingress.kubernetes.io/fastcgi-params-configmap".to_owned(),
-                        self.name.clone()
-                    ),
-                ])),
-                ..Default::default()
-            },
-            spec: Some(IngressSpec {
-                ingress_class_name: Some("nginx".to_string()),
-                rules: Some(vec![ingress_rule]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        // Create the ConfigMap object
-        let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), self.namespace.as_ref());
-        let patch_params = PatchParams {
-            //field_manager: Some("nextcloud_field_manager".to_string()),
-            field_manager: Some("nextcloud_field_manager".to_string()),
-            ..PatchParams::default()
-        };
-        config_maps.patch(
-            self.name.as_str(),
-            &patch_params,
-            &Patch::Apply(&config_map)
-        ).await?;
-
-        // Create the Ingress object
-        // NOTE: the ingress controller has to be enabled: minikube addons enable ingress
-        // https://kubernetes.github.io/ingress-nginx/deploy/
-        let ingresses: Api<Ingress> = Api::namespaced(client.clone(), self.namespace.as_ref());
-        /*let patch_params = PatchParams {
-            //field_manager: Some("nextcloud_field_manager".to_string()),
-            field_manager: None,
-            ..PatchParams::default()
-        };*/
-        let patch_params = PatchParams::apply("nextcloud_field_manger");
-        info!("----- ANTES DE INGRESS");
-        ingresses.patch(
-            self.name.as_str(),
-            &patch_params,
-            &Patch::Apply(&ingress)
-        ).await?;
-        info!("----- DESPUES DE INGRESS");
-
-        Ok(())
-    }
-
-    /// returns a new service for the NextcloudElement object
-    pub fn create_service(&self)
-        -> Result<Service, Error> {
-        Ok(Service {
-            metadata: ObjectMeta {
-                name: Some(format!("service-{}-{}", self.prefix, self.name)),
-                namespace: Some(self.namespace.to_owned()),
-                labels: Some(self.labels.clone()),
-                //annotations: Some(self.annotations.clone()),
-                //TODO: add labes to selectors
-                annotations: Some(self.selector.clone()),
-                ..ObjectMeta::default()
-            },
-            spec: Some(ServiceSpec {
-                type_: Some("LoadBalancer".to_string()),
-                ports: Some(vec![
-                    ServicePort {
-                        node_port: self.node_port,
-                        port: self.container_port,
-                        target_port: Some(IntOrString::Int(self.container_port)),
-                        //TODO: check if we need other protocols
-                        protocol: Some("TCP".to_string()),
-                        ..Default::default()
-                    },
-                // The selector must contain the object labels
-                ]),
-                selector: Some(self.selector.clone()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
-    }
-
-    /// Creates a PersistentVolumeClaim
-    /// https://docs.rs/k8s-openapi/0.21.0/k8s_openapi/api/core/v1/struct.PersistentVolumeClaimSpec.html
-    /// https://kubernetes.io/docs/concepts/storage/persistent-volumes/#class-1
-    fn create_pvc(&self)
-        -> Result<PersistentVolumeClaim, Error> {
-        Ok(PersistentVolumeClaim {
-                metadata: ObjectMeta {
-                    name: Some(format!("pvc-{}-{}", self.prefix, self.name)),
-                    namespace: Some(self.namespace.to_owned()),
-                    labels: Some(self.labels.clone()),
-                    annotations: Some(self.annotations.clone()),
-                    ..ObjectMeta::default()
-                },
-                spec: Some(PersistentVolumeClaimSpec {
-                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
-                    //TODO: make this a parameter storage_class_name: Some(""),
-                    resources: Some(ResourceRequirements {
-                        requests: Some(
-                                  BTreeMap::from([
-                                      ("storage".to_string(), Quantity("5Gi".to_string())),
-                                  ])
-                                ),
-                      ..Default::default()
-                    }),
-                    selector: Some(LabelSelector {
-                        match_expressions: None,
-                        match_labels: Some(self.labels.clone()),
-                    }),
-                    ..PersistentVolumeClaimSpec::default()
-                }),
-                ..PersistentVolumeClaim::default()
-            }
-        )
-    }
-
-
-    /// Add a volume from a configmap to be mounted on the container
-    /// Arguments:
-    /// config_map: Name of the config map
-    /// name: Name of the volume
-    fn add_config_volume(&mut self, config_map: String, name: String, )
-        -> Result<(), Error> {
-        self.volumes.push(Volume {
-            name: name,
-            config_map: Some(ConfigMapVolumeSource {
-                name: Some(config_map),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        // TODO: add proper error management
-        Ok(())
-    }
-
-
-    /// Add a volume from a persistent volume claim
-    /// Arguments
-    /// pvc_name: Name of the PersistentVolumeClaim
-    /// name: Name of the Volume
-    fn add_pvc_volume(&mut self, pvc_name: String, name: String)
-        -> Result<(), Error> {
-        self.volumes.push(Volume {
-            name: name.clone(),
-            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                claim_name: pvc_name.clone(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        // TODO: add proper error management
-        Ok(())
-    }
-
-    /// Add a volume mount for the container
-    /// Arguments:
-    /// name: name of the Volume to mount
-    /// mount_path: path where the Volume is going to mount inside the container
-    /// read_only: true if the volume is read only
-    fn add_volume_mount(
-        &mut self,
-        name: String,
-        mount_path: String,
-        read_only: bool)
-        -> Result<(), Error> {
-        // Define the volume mount for the ConfigMap
-        self.volume_mounts.push(VolumeMount {
-            name: name,
-            mount_path: mount_path,
-            read_only: Some(read_only),
-            ..Default::default()
-        });
-        // TODO: add proper error management
-        Ok(())
-    }
-
-
-    /// Executes a command and returns the output as a string
-    async fn exec(&self, client: Client, command: Vec<&str>)
-        -> Result<String, NextcloudError> {
-        let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
-        let lp = ListParams::default().labels("endpoint=php-fpm");
-        let pod =  pods.list(&lp).await?.items[0].clone();
-        let pod_name = pod.name_any();
-        info!("Executing command on pod: {}", &pod_name);
-        let mut attached = pods
-            .exec(
-                &pod_name,
-                command,
-                &AttachParams::default().stdout(true),
-            )
-            .await?;
-        let stdout = ReaderStream::new(attached.stdout().unwrap());
-        let out = stdout
-            .filter_map(|r| async { r.ok().and_then(|v| String::from_utf8(v.to_vec()).ok()) })
-            .collect::<Vec<_>>()
-            .await
-            .join("");
-        info!("Output: {}", out);
-        attached.join().await.unwrap();
-        Ok(out.to_string())
-    }
-}
-
-
 /// Apply the changes
 pub async fn apply(
     client: Client,
@@ -473,9 +116,6 @@ pub async fn apply(
     nextcloud_object: Arc<Nextcloud>,
     namespace: &str,
 ) -> Result<NextcloudStatus, NextcloudError> {
-//) -> Result<(), NextcloudError> {
-
-    //let mut nextcloud_object = nextcloud.lock().unwrap();
     let mut global_state_hash = "HASH".to_string();
     info!("Applying Nextcloud elements: {}", name);
     let deployments = vec![
@@ -490,7 +130,6 @@ pub async fn apply(
         ("app".to_owned(), name.to_owned()),
     ]);
 
-    info!("---- PULL SECRET? {:?}", nextcloud_object.spec.image_pull_secret.clone());
     let image_pull_secrets = vec![
         LocalObjectReference {
             name: Some(nextcloud_object.spec.image_pull_secret.clone()),
@@ -555,7 +194,6 @@ pub async fn apply(
         }
     };
 
-    info!("-------- PVCS {:?}", pvc_api.list(&list_params).await.unwrap().items.len());
     let pvc_list = match pvc_api.list(&list_params).await {
         Ok(l) => l,
         Err(e) => {
@@ -581,7 +219,6 @@ pub async fn apply(
     let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
     let service_api: Api<Service> = Api::namespaced(client.clone(), namespace.clone());
 
-    //info!("CREATING ELEMENT: {:?}", dep);
     let state_hash = create_hash(
         name,
         php.replicas,
@@ -616,7 +253,6 @@ pub async fn apply(
     deployment_api
         .patch(&php.name, &patch_params, &Patch::Apply(&deployment))
         .await?;
-    //info!("RESULT PHP Deployment: {:?}", _ret);
     info!("Done applying Deployment: {}", php.name);
     let service = php.create_service()?;
     let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
@@ -629,13 +265,9 @@ pub async fn apply(
         .await?;
 
     let deployment = nginx.as_deployment()?;
-    //info!("Deployment: {:?}", &deployment);
-
-    //let _ret = deployment_api
     deployment_api
         .patch(&nginx.name, &patch_params, &Patch::Apply(&deployment))
         .await?;
-    //info!("RESULT nginx Deployment: {:?}", _ret);
     info!("Done nginx applying Deployment: {}", nginx.name);
     let service = nginx.create_service()?;
     let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
@@ -653,11 +285,17 @@ pub async fn apply(
 
     let output = match php.exec(
         client.clone(),
-        vec!["ls", "-la", "/usr/share/nginx/html"])
+        vec!["stat", "-c", "%U", "/usr/share/nginx/html/config"])
         .await {
-        Ok(o)  => {info!("--- EXEC output: {}", o);}
+        Ok(o)  => {
+            info!("--- EXEC output: {}", o);
+            if o != "nginx" {
+                php.apply_permissions(client.clone()).await?;
+            }
+        }
         Err(e) => {info!("--- ERROR EXEC!: {:?}", e);}
     };
+
 
     // Create ingress
     //ingress.create_ingress(client.clone()).await?;
