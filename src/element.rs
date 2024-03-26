@@ -34,7 +34,6 @@ use tokio_util::io::ReaderStream;
 use futures::StreamExt;
 use std::fmt::Debug;
 // Local modules
-use crate::crd::{NextcloudStatus, NextcloudResource};
 use crate::error::{NextcloudError};
 
 pub static DOCUMENT_ROOT: &str = "/usr/share/nginx/html";
@@ -42,19 +41,19 @@ pub static DOCUMENT_ROOT: &str = "/usr/share/nginx/html";
 /// Represents NextCloud deployments
 #[derive(Debug)]
 pub struct NextcloudElement {
-    name: String,
-    prefix: String,
-    image: String,
-    namespace: String,
-    replicas: i32,
-    container_port: i32,
-    node_port: Option<i32>,
-    labels: BTreeMap<String, String>,
-    selector: BTreeMap<String, String>,
-    image_pull_secrets: Vec<LocalObjectReference>,
-    annotations: BTreeMap<String, String>,
-    volumes: Vec<Volume>,
-    volume_mounts: Vec<VolumeMount>,
+    pub name: String,
+    pub prefix: String,
+    pub image: String,
+    pub namespace: String,
+    pub replicas: i32,
+    pub container_port: i32,
+    pub node_port: Option<i32>,
+    pub labels: BTreeMap<String, String>,
+    pub selector: BTreeMap<String, String>,
+    pub image_pull_secrets: Vec<LocalObjectReference>,
+    pub annotations: BTreeMap<String, String>,
+    pub volumes: Vec<Volume>,
+    pub volume_mounts: Vec<VolumeMount>,
 }
 
 /// NextcloudElement implementation
@@ -155,7 +154,7 @@ impl NextcloudElement {
     /// Creates a PersistentVolumeClaim
     /// https://docs.rs/k8s-openapi/0.21.0/k8s_openapi/api/core/v1/struct.PersistentVolumeClaimSpec.html
     /// https://kubernetes.io/docs/concepts/storage/persistent-volumes/#class-1
-    fn create_pvc(&self)
+    pub fn create_pvc(&self)
         -> Result<PersistentVolumeClaim, Error> {
         Ok(PersistentVolumeClaim {
                 metadata: ObjectMeta {
@@ -192,7 +191,7 @@ impl NextcloudElement {
     /// Arguments:
     /// config_map: Name of the config map
     /// name: Name of the volume
-    fn add_config_volume(&mut self, config_map: String, name: String, )
+    pub fn add_config_volume(&mut self, config_map: String, name: String, )
         -> Result<(), Error> {
         self.volumes.push(Volume {
             name: name,
@@ -211,7 +210,7 @@ impl NextcloudElement {
     /// Arguments
     /// pvc_name: Name of the PersistentVolumeClaim
     /// name: Name of the Volume
-    fn add_pvc_volume(&mut self, pvc_name: String, name: String)
+    pub fn add_pvc_volume(&mut self, pvc_name: String, name: String)
         -> Result<(), Error> {
         self.volumes.push(Volume {
             name: name.clone(),
@@ -230,7 +229,7 @@ impl NextcloudElement {
     /// name: name of the Volume to mount
     /// mount_path: path where the Volume is going to mount inside the container
     /// read_only: true if the volume is read only
-    fn add_volume_mount(
+    pub fn add_volume_mount(
         &mut self,
         name: String,
         mount_path: String,
@@ -249,7 +248,7 @@ impl NextcloudElement {
 
 
     /// Executes a command and returns the output as a string
-    async fn exec(
+    pub async fn exec(
         &self,
         client: Client,
         command: Vec<&str>
@@ -278,7 +277,7 @@ impl NextcloudElement {
 
     /// Update permissions for Nextcloud
     // This is temporary just for tests
-    async fn apply_permissions(&self, client: Client)
+    pub async fn apply_permissions(&self, client: Client)
     -> Result<(), NextcloudError> {
         info!("Enabling apache user to write to config file TODO REMOVE THIS");
         let output = match self.exec(
