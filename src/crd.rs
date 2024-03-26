@@ -2,8 +2,8 @@ use kube::{CustomResource, CustomResourceExt, client::Client, Api, api::PatchPar
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use log::{info, debug};
-use std::sync::{Arc, Mutex, MutexGuard};
+use log::{info};
+use std::sync::{Arc, Mutex};
 use core::ops::{Deref, DerefMut};
 //use kube::{client::Client, runtime::controller::Action, runtime::Controller, Api};
 
