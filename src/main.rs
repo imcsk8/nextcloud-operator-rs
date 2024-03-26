@@ -216,8 +216,8 @@ async fn reconcile(nextcloud: Arc<Nextcloud>, context: Arc<ContextData>) -> Resu
             // Note: A more advanced implementation would check for the Deployment's existence.
             debug!("DELETING: {} NAMESPACE: {}", &name, &namespace);
             match delete_elements(client.clone(), &namespace).await {
-                Ok(d)  => info!("Deployments deleted"),
-                Err(e) => info!("No deployments for Nextcloud: {}", name),
+                Ok(_d)  => info!("Deployments deleted"),
+                Err(_e) => info!("No deployments for Nextcloud: {}", name),
             };
 
             // Once the deployment is successfully removed, remove the finalizer to make it possible
@@ -340,7 +340,7 @@ async fn check_component_status(client: Client, namespace: String) -> Result <()
         info!("Checking pod: {} status", pod_name);
         let pod_status = p.status.clone().unwrap();
         match pod_status.pod_ip.clone() {
-            Some(i) => {
+            Some(_i) => {
                 info!("🙌 Pod IP: {}", pod_status.pod_ip.clone().unwrap());
             },
             None => info!("😢 No IP available for: {}", pod_name),
