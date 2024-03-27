@@ -117,8 +117,8 @@ pub async fn apply(
         volume_mounts: Vec::new(),
     };
 
-    let mut nginx = NextcloudElement {
-        name: "nginx".to_string(),
+    let mut ingress = NextcloudElement {
+        name: "ingress".to_string(),
         prefix: "nextcloud".to_string(),
         image: nextcloud_object.spec.nginx_image.clone(),
         namespace: namespace.to_string(),
@@ -127,7 +127,7 @@ pub async fn apply(
         node_port: Some(30001),
         labels: labels.clone(),
         selector: BTreeMap::from([
-            ("endpoint".to_string(), "nginx".to_string())
+            ("endpoint".to_string(), "php-fpm".to_string())
         ]),
         image_pull_secrets: image_pull_secrets.clone(),
         annotations: annotations.clone(),
@@ -261,8 +261,8 @@ pub async fn apply(
 
 
     // Create ingress
-    //ingress.create_ingress(client.clone()).await?;
-    //info!("Done applying Ingress: {}", ingress.name);
+    ingress.create_ingress(client.clone()).await?;
+    info!("Done applying Ingress: {}", ingress.name);
 
     //checar estatus y agregar el nuevo si ha cambiado
 
