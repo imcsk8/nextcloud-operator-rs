@@ -2,14 +2,21 @@ use k8s_openapi::api::apps::v1::{Deployment};
 use k8s_openapi::api::core::v1::{
     LocalObjectReference,
     PersistentVolumeClaim,
+    PersistentVolumeClaimSpec,
+    ResourceRequirements,
     Service,
 };
 use kube::api::{
+    ObjectMeta,
     DeleteParams,
     Patch,
     PatchParams,
     ListParams,
 };
+
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use k8s_openapi::api::networking::v1::Ingress;
 use kube::{Api, Client, Error, Resource};
 use std::collections::BTreeMap;
 use crate::Nextcloud;
@@ -143,9 +150,14 @@ pub async fn apply(
     let list_params = ListParams::default();
     // Use the nginx element
     let pvc = php.create_pvc()?;
+
+    let app_pvc = create_app_pvc(namespace, "1Gi",
+        labels.clone(),
+        annotations.clone())?;
+
     let pvc_api: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), namespace);
     //let mut pvcs = match pcv_api.list(&list_params).await {
-    let pvc_name = match pvc.meta().name.clone() { //TODO: remove unwrap
+    let php_pvc_name = match pvc.meta().name.clone() { //TODO: remove unwrap
         Some(n) => n,
         None    => {
             info!("Error getting PVC resource name");
@@ -157,25 +169,52 @@ pub async fn apply(
         }
     };
 
+    let app_pvc_name = match app_pvc.meta().name.clone() { //TODO: remove unwrap
+        Some(n) => n,
+        None    => {
+            info!("Error getting PVC resource name");
+            return Err(
+                NextcloudError::DeployError(
+                    "Error getting PVC resource name".to_string()
+                )
+            );
+        }
+    };
+
+
+
     let pvc_list = match pvc_api.list(&list_params).await {
         Ok(l) => l,
         Err(e) => {
             return Err(NextcloudError::KubeError { source:e });
         }
     };
+
     let pvc_len = pvc_list.items.len();
+    info!("NUM PVs {}", pvc_len);
     // No PVC yet
-    if pvc_len <= 0 {
-        info!("Creating PVC: {}", pvc_name);
+    //TODO: check each resouce
+    if pvc_len < 2 {
+        info!("Creating PVC: {}", php_pvc_name);
         let _result = pvc_api
             .patch(
-                pvc_name.as_str(),
+                php_pvc_name.as_str(),
                 &patch_params,
                 &Patch::Apply(&pvc)
             )
             .await?;
+
+        info!("Creating PVC: {}", app_pvc_name);
+        let _result = pvc_api
+            .patch(
+                app_pvc_name.as_str(),
+                &patch_params,
+                &Patch::Apply(&app_pvc)
+            )
+            .await?;
+
     } else {
-        info!("PV {} already exists", pvc_name);
+        info!("PV {} {} already exists", php_pvc_name, app_pvc_name);
     }
 
     // Create the deployment defined above
@@ -194,19 +233,16 @@ pub async fn apply(
         .to_owned();
 
     // Volumes
-    let pvc_volume_name = "pvc-nextcloud-nginx".to_string();
-    php.add_pvc_volume(pvc_volume_name.clone(), nginx.name.clone());
-    nginx.add_pvc_volume(pvc_volume_name.clone(), nginx.name.clone());
+    php.add_pvc_volume(php_pvc_name.clone(), "php-pvc".to_string());
+    php.add_pvc_volume(app_pvc_name.clone(), "app-pvc".to_string());
+    //ingress.add_pvc_volume(pvc_volume_name.clone(), ingress.name.clone());
     php.add_config_volume("php-www".to_string(), "php-www".to_string());
     php.add_volume_mount("php-www".to_string(),
         "/etc/php-fpm.d/".to_string(), true);
-    php.add_volume_mount(nginx.name.clone(),
+    php.add_volume_mount("app-pvc".to_string(),
         DOCUMENT_ROOT.to_string(), false);
-    nginx.add_volume_mount(nginx.name.clone(),
-        DOCUMENT_ROOT.to_string(), false);
-
-    info!("nginx deployment: {:?}", nginx.volume_mounts);
-
+    /*ingress.add_volume_mount(app_pvc_name.clone(),
+        DOCUMENT_ROOT.to_string(), false);*/
 
     let deployment = php.as_deployment()?;
 
@@ -227,12 +263,12 @@ pub async fn apply(
         )
         .await?;
 
-    let deployment = nginx.as_deployment()?;
+    /*let deployment = ingress.as_deployment()?;
     deployment_api
-        .patch(&nginx.name, &patch_params, &Patch::Apply(&deployment))
+        .patch(&ingress.name, &patch_params, &Patch::Apply(&deployment))
         .await?;
-    info!("Done nginx applying Deployment: {}", nginx.name);
-    let service = nginx.create_service()?;
+    info!("Done nginx applying Deployment: {}", ingress.name);
+    let service = ingress.create_service()?;
     let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
     let _result = service_api
         .patch(
@@ -241,7 +277,7 @@ pub async fn apply(
             &Patch::Apply(&service)
         )
         .await?;
-
+    */
     /*let ret = nextcloud_object.is_installed(client.clone(), "nginx").await;
     info!("iS INSTALLED: {:?}", ret);*/
     info!("Done applying Service: {}", service_name);
@@ -293,7 +329,7 @@ pub async fn delete_elements(client: Client, namespace: &str) ->
     let api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
     let delete_params = DeleteParams::default();
     //let mut error = ("".to_string(), false);
-    let elements = vec!["nginx", "php-fpm"];
+    let elements = vec!["ingress", "php-fpm"];
     for elem in elements.iter() {
         match api.delete(elem, &delete_params).await {
             Ok(r)  => info!("{} delete Ok response: {:?}", &elem, r),
@@ -319,6 +355,15 @@ pub async fn delete_elements(client: Client, namespace: &str) ->
             }
         };
     }
+
+    // Delete ingress 
+    let api: Api<Ingress> = Api::namespaced(client.clone(), namespace);
+    match api.delete("ingress", &delete_params).await {
+        Ok(r)  => info!("ingress delete Ok response: {:?}", r),
+        Err(e) => {
+            info!("ingress delete Err response: {:?}", e);
+        }
+    };
 
     Ok(())
 }
@@ -366,3 +411,45 @@ pub fn create_hash(name: &str,
       .map(|byte| format!("{:02x}", byte))
       .collect::<String>()
 }
+
+
+
+/// Creates a PersistentVolumeClaim
+/// https://docs.rs/k8s-openapi/0.21.0/k8s_openapi/api/core/v1/struct.PersistentVolumeClaimSpec.html
+/// https://kubernetes.io/docs/concepts/storage/persistent-volumes/#class-1
+pub fn create_app_pvc(namespace: &str,
+    size: &str,
+    labels: BTreeMap<String, String>,
+    annotations: BTreeMap<String, String>)
+    -> Result<PersistentVolumeClaim, Error> {
+    Ok(PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("pvc-nextcloud-app".to_string()),
+                namespace: Some(namespace.to_owned()),
+                labels: Some(labels.clone()),
+                annotations: Some(annotations.clone()),
+                ..ObjectMeta::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec {
+                access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                //TODO: make this a parameter storage_class_name: Some(""),
+                resources: Some(ResourceRequirements {
+                    requests: Some(
+                              BTreeMap::from([
+                                  ("storage".to_string(), Quantity(size.to_string())),
+                              ])
+                            ),
+                  ..Default::default()
+                }),
+                selector: Some(LabelSelector {
+                    match_expressions: None,
+                    match_labels: Some(labels.clone()),
+                }),
+                ..PersistentVolumeClaimSpec::default()
+            }),
+            ..PersistentVolumeClaim::default()
+        }
+    )
+}
+
+
