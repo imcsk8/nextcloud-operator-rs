@@ -253,12 +253,17 @@ impl NextcloudElement {
         client: Client,
         command: Vec<&str>
     ) -> Result<String, NextcloudError> {
-        let pods: Api<Pod> = Api::namespaced(client, &self.namespace);
+        let pod_api: Api<Pod> = Api::namespaced(client, &self.namespace);
         let lp = ListParams::default().labels("endpoint=php-fpm");
-        let pod =  pods.list(&lp).await?.items[0].clone();
+        let pods = pod_api.list(&lp).await?;
+        info!("php-fpm pods available: {}", pods.items.len());
+        if pods.items.len() < 0 {
+            return Ok("Pods not ready yet".to_string());
+        }
+        let pod =  pods.items[0].clone(); //TODO: check pod existence
         let pod_name = pod.name_any();
         info!("Executing command on pod: {}", &pod_name);
-        let mut attached = pods
+        let mut attached = pod_api
             .exec(
                 &pod_name,
                 command,
