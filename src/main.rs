@@ -25,6 +25,7 @@ use nextcloud::*;
 use crate::error::*;
 
 pub mod crd;
+mod constants;
 mod element;
 mod error;
 mod ingress;
