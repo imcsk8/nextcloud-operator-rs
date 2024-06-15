@@ -257,7 +257,7 @@ impl NextcloudElement {
         let lp = ListParams::default().labels("endpoint=php-fpm");
         let pods = pod_api.list(&lp).await?;
         info!("php-fpm pods available: {}", pods.items.len());
-        if pods.items.len() < 0 {
+        if pods.items.len() <= 0 {
             return Ok("Pods not ready yet".to_string());
         }
         let pod =  pods.items[0].clone(); //TODO: check pod existence
