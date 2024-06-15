@@ -34,9 +34,8 @@ use tokio_util::io::ReaderStream;
 use futures::StreamExt;
 use std::fmt::Debug;
 // Local modules
+use crate::constants::*;
 use crate::error::{NextcloudError};
-
-pub static DOCUMENT_ROOT: &str = "/usr/share/nginx/html";
 
 /// Represents NextCloud deployments
 #[derive(Debug)]
@@ -123,7 +122,7 @@ impl NextcloudElement {
         -> Result<Service, Error> {
         Ok(Service {
             metadata: ObjectMeta {
-                name: Some(format!("service-{}-{}", self.prefix, self.name)),
+                name: Some(PHP_FPM_SERVICE_NAME.to_string()),
                 namespace: Some(self.namespace.to_owned()),
                 labels: Some(self.labels.clone()),
                 //annotations: Some(self.annotations.clone()),
