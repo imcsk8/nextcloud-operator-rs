@@ -25,6 +25,7 @@ use std::fs;
 
 static NEXTCLOUD_NGINX_MAIN_CONFIG: &str = "files/nextcloud_nginx_ingress_main.conf";
 static NEXTCLOUD_NGINX_SERVER_CONFIG: &str = "files/nextcloud_nginx_ingress_server.conf";
+static DOCUMENT_ROOT: &str = "/usr/share/nginx/html/";
 
 /// Ingress object functionality
 pub trait NextcloudIngress {
@@ -36,28 +37,21 @@ pub trait NextcloudIngress {
 impl NextcloudIngress for NextcloudElement {
     /// Create an ingress object configured to serve the FastCGI protocol
     async fn create_ingress(&self, client: Client) -> Result<(), Error> {
-        // Configuration snippet
-        /*let nginx_main_config = fs::read_to_string(&NEXTCLOUD_NGINX_MAIN_CONFIG)
-            .expect("Error reading nextcloud ingress configuration");*/
-        let nginx_server_config = fs::read_to_string(&NEXTCLOUD_NGINX_SERVER_CONFIG)
-            .expect("Error reading nextcloud ingress configuration");
-        // TODO: check return value
+        let configmap_name = format!("ingress-php-fpm-{}", self.name.clone());
         // Create the ConfigMap object
-        /*let config_map = ConfigMap {
+        let config_map = ConfigMap {
             metadata: ObjectMeta {
-                    name: Some(self.name.clone()),
-                    //name: Some("nextcloud-ingress".to_string()),
+                    name: Some(configmap_name.clone()),
                     ..Default::default()
             },
             data: Some(BTreeMap::from([
-                ("DOCUMENT_ROOT".to_owned(), DOCUMENT_ROOT.to_string()),
                 (
                     "SCRIPT_FILENAME".to_owned(),
                     format!("{}$fastcgi_script_name", DOCUMENT_ROOT)
                 ),
             ])),
             ..Default::default()
-        };*/
+        };
 
         let ingress_rule = IngressRule {
             //TODO: take from the CRD
@@ -76,7 +70,6 @@ impl NextcloudIngress for NextcloudElement {
                                     number: Some(9000),
                                 }),
                             }),
-                            //might need service instead
                             ..Default::default()
                         },
                     }
@@ -89,7 +82,6 @@ impl NextcloudIngress for NextcloudElement {
                 name: Some(self.name.clone()),
                 namespace: Some(self.namespace.clone()),
                 labels: Some(self.labels.clone()),
-                //annotations: Some(self.annotations.clone()),
                 annotations: Some(BTreeMap::from([
                     (
                         "nginx.ingress.kubernetes.io/backend-protocol".to_owned(),
@@ -106,22 +98,8 @@ impl NextcloudIngress for NextcloudElement {
 
                     (
                         "nginx.ingress.kubernetes.io/fastcgi-params-configmap".to_owned(),
-                        "ingress-php-fpm".to_string(), //TODO: create configmap in this function
+                        configmap_name.clone(),
                     ),
-
-                    /*
-                    (
-                        "nginx.ingress.kubernetes.io/stream-snippet".to_owned(),
-                        nginx_main_config.clone()
-                    ),*/
-
-                    /*(
-                        "nginx.ingress.kubernetes.io/main-snippet".to_owned(),
-                        nginx_server_config.clone()
-                    ),*/
-
-
-
                 ])),
                 ..Default::default()
             },
@@ -134,35 +112,29 @@ impl NextcloudIngress for NextcloudElement {
         };
 
         // Create the ConfigMap object
-        /*let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), self.namespace.as_ref());
+        let config_maps: Api<ConfigMap> = Api::namespaced(client.clone(), self.namespace.as_ref());
         let patch_params = PatchParams {
-            //field_manager: Some("nextcloud_field_manager".to_string()),
             field_manager: Some("nextcloud_field_manager".to_string()),
             ..PatchParams::default()
         };
         config_maps.patch(
-            self.name.as_str(),
+            &configmap_name,
             &patch_params,
             &Patch::Apply(&config_map)
         ).await?;
-        */
+
         // Create the Ingress object
         // NOTE: the ingress controller has to be enabled: minikube addons enable ingress
         // https://kubernetes.github.io/ingress-nginx/deploy/
         let ingresses: Api<Ingress> = Api::namespaced(client.clone(), self.namespace.as_ref());
-        /*let patch_params = PatchParams {
-            //field_manager: Some("nextcloud_field_manager".to_string()),
-            field_manager: None,
-            ..PatchParams::default()
-        };*/
         let patch_params = PatchParams::apply("nextcloud_field_manger");
-        info!("----- ANTES DE INGRESS");
+        info!("Ingress::Creating or Updating");
         ingresses.patch(
             self.name.as_str(),
             &patch_params,
             &Patch::Apply(&ingress)
         ).await?;
-        info!("----- DESPUES DE INGRESS");
+        info!("Ingress::Updated");
 
         Ok(())
     }
