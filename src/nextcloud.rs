@@ -1,5 +1,6 @@
 use k8s_openapi::api::apps::v1::{Deployment};
 use k8s_openapi::api::core::v1::{
+    ConfigMap,
     LocalObjectReference,
     PersistentVolumeClaim,
     PersistentVolumeClaimSpec,
@@ -263,21 +264,6 @@ pub async fn apply(
         )
         .await?;
 
-    /*let deployment = ingress.as_deployment()?;
-    deployment_api
-        .patch(&ingress.name, &patch_params, &Patch::Apply(&deployment))
-        .await?;
-    info!("Done nginx applying Deployment: {}", ingress.name);
-    let service = ingress.create_service()?;
-    let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
-    let _result = service_api
-        .patch(
-            service_name.as_str(),
-            &patch_params,
-            &Patch::Apply(&service)
-        )
-        .await?;
-    */
     /*let ret = nextcloud_object.is_installed(client.clone(), "nginx").await;
     info!("iS INSTALLED: {:?}", ret);*/
     info!("Done applying Service: {}", service_name);
@@ -295,12 +281,11 @@ pub async fn apply(
         Err(e) => {info!("--- ERROR EXEC!: {:?}", e);}
     };
 
-
     // Create ingress
     ingress.create_ingress(client.clone()).await?;
     info!("Done applying Ingress: {}", ingress.name);
 
-    //checar estatus y agregar el nuevo si ha cambiado
+    //TODO: update status
 
     // TODO check if we need a success object
     Ok(NextcloudStatus {
@@ -341,7 +326,6 @@ pub async fn delete_elements(client: Client, namespace: &str) ->
         };
     }
 
-
     info!("--------- Deleting Nextcloud services for namespace {}", &namespace);
     let api: Api<Service> = Api::namespaced(client.clone(), namespace);
     let elements = vec!["service-nextcloud-nginx", "service-nextcloud-php-fpm"];
@@ -357,41 +341,32 @@ pub async fn delete_elements(client: Client, namespace: &str) ->
     }
 
     // Delete ingress 
+    /*let ingress_name = ingress.name.clone();
+    let configmap_name = format!("ingress-php-fpm-{}", ingress_name);*/
     let api: Api<Ingress> = Api::namespaced(client.clone(), namespace);
     match api.delete("ingress", &delete_params).await {
+    //match api.delete(ingress_name.clone(), &delete_params).await {
+        //Ok(r)  => info!("{} delete Ok response: {:?}", ingress_name, r),
         Ok(r)  => info!("ingress delete Ok response: {:?}", r),
         Err(e) => {
             info!("ingress delete Err response: {:?}", e);
         }
     };
 
+    // Delete ingress  configmap
+    let api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
+    //match api.delete(&configmap_name, &delete_params).await {
+    match api.delete("ingress-php-fpm-ingress", &delete_params).await {
+        //Ok(r)  => info!("{} delete Ok response: {:?}", configmap_name, r),
+        Ok(r)  => info!("configmap delete Ok response: {:?}", r),
+        Err(e) => {
+            //info!("{} delete Err response: {:?}", configmap_name,  e);
+            info!("configmap delete Err response: {:?}", e);
+        }
+    };
+
     Ok(())
 }
-
-
-
-/* TODO: check trait bounds problem
-/// Delete a list of resources
-pub async fn delete_list<T>(api: Api<T>, elements: Vec<&str>) -> Result<(), Error> {
-    let delete_params = DeleteParams::default();
-    let mut error = ("".to_string(), false);
-    for elem in elements.iter() {
-        match api.delete(elem, &delete_params).await {
-            Ok(r)  => info!("{} delete Ok response: {:?}", &elem, r),
-            Err(e) => {
-                info!("{} delete Err response: {:?}", &elem, e);
-                error = (elem.to_string(), true);
-            }
-        };
-    }
-
-    if ! error.1 {
-        Ok(())
-    } else {
-        Err("Could not delete {}, check the logs", error.0)
-    }
-}
-*/
 
 
 /// Creates a sha256 hash from the given attributes
@@ -411,7 +386,6 @@ pub fn create_hash(name: &str,
       .map(|byte| format!("{:02x}", byte))
       .collect::<String>()
 }
-
 
 
 /// Creates a PersistentVolumeClaim
