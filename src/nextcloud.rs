@@ -26,10 +26,12 @@ use log::{info};
 use sha2::{Digest, Sha256};
 use futures::StreamExt;
 // Local modules
+use crate::constants::*;
 use crate::crd::{NextcloudStatus};
 use crate::element::*;
 use crate::error::{NextcloudError};
 use crate::ingress::*;
+
 
 /// Nextcloud application management<
 /*pub trait NextcloudApp {
@@ -90,8 +92,7 @@ pub async fn apply(
     let mut global_state_hash = "HASH".to_string();
     info!("Applying Nextcloud elements: {}", name);
     let deployments = vec![
-      "php-fpm",
-      "nginx",
+      PHP_FPM_NAME,
     ];
 
     let mut annotations: BTreeMap<String, String> = BTreeMap::new();
@@ -108,16 +109,16 @@ pub async fn apply(
     ];
 
     let mut php = NextcloudElement {
-        name: "php-fpm".to_string(),
-        prefix: "nextcloud".to_string(),
+        name: PHP_FPM_NAME.to_string(),
+        prefix: PREFIX.to_string(),
         image: nextcloud_object.spec.php_image.clone(),
         namespace: namespace.to_string(),
-        replicas: nextcloud_object.spec.replicas, //TODO: should we use different replica size for each deployment?
+        replicas: nextcloud_object.spec.replicas,
         container_port: 9000,
-        node_port: Some(30000), // TODO: revisar
+        node_port: Some(30000), // TODO: check
         labels: labels.clone(),
         selector: BTreeMap::from([
-            ("endpoint".to_string(), "php-fpm".to_string())
+            ("endpoint".to_string(), PHP_FPM_NAME.to_string())
         ]),
         image_pull_secrets: image_pull_secrets.clone(),
         annotations: annotations.clone(),
@@ -126,8 +127,8 @@ pub async fn apply(
     };
 
     let mut ingress = NextcloudElement {
-        name: "ingress".to_string(),
-        prefix: "nextcloud".to_string(),
+        name: INGRESS_NAME.to_string(),
+        prefix: PREFIX.to_string(),
         image: nextcloud_object.spec.nginx_image.clone(),
         namespace: namespace.to_string(),
         replicas: nextcloud_object.spec.replicas,
@@ -135,7 +136,7 @@ pub async fn apply(
         node_port: Some(30001),
         labels: labels.clone(),
         selector: BTreeMap::from([
-            ("endpoint".to_string(), "php-fpm".to_string())
+            ("endpoint".to_string(), PHP_FPM_NAME.to_string())
         ]),
         image_pull_secrets: image_pull_secrets.clone(),
         annotations: annotations.clone(),
@@ -144,7 +145,7 @@ pub async fn apply(
     };
 
     let patch_params = PatchParams {
-        field_manager: Some("nextcloud_field_manager".to_string()),
+        field_manager: Some(FIELD_MANAGER.to_string()),
         ..PatchParams::default()
     };
 
@@ -255,10 +256,9 @@ pub async fn apply(
         .await?;
     info!("Done applying Deployment: {}", php.name);
     let service = php.create_service()?;
-    let service_name = service.clone().metadata.name.unwrap_or("ERROR".to_string());
     let _result = service_api
         .patch(
-            service_name.as_str(),
+            &PHP_FPM_SERVICE_NAME,
             &patch_params,
             &Patch::Apply(&service)
         )
@@ -266,7 +266,7 @@ pub async fn apply(
 
     /*let ret = nextcloud_object.is_installed(client.clone(), "nginx").await;
     info!("iS INSTALLED: {:?}", ret);*/
-    info!("Done applying Service: {}", service_name);
+    info!("Done applying Service: {}", PHP_FPM_SERVICE_NAME);
 
     let output = match php.exec(
         client.clone(),
@@ -314,7 +314,7 @@ pub async fn delete_elements(client: Client, namespace: &str) ->
     let api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
     let delete_params = DeleteParams::default();
     //let mut error = ("".to_string(), false);
-    let elements = vec!["ingress", "php-fpm"];
+    let elements = vec![PHP_FPM_NAME];
     for elem in elements.iter() {
         match api.delete(elem, &delete_params).await {
             Ok(r)  => info!("{} delete Ok response: {:?}", &elem, r),
@@ -328,7 +328,7 @@ pub async fn delete_elements(client: Client, namespace: &str) ->
 
     info!("--------- Deleting Nextcloud services for namespace {}", &namespace);
     let api: Api<Service> = Api::namespaced(client.clone(), namespace);
-    let elements = vec!["service-nextcloud-nginx", "service-nextcloud-php-fpm"];
+    let elements = vec![PHP_FPM_SERVICE_NAME];
     for elem in elements.iter() {
         match api.delete(elem, &delete_params).await {
             Ok(r)  => info!("{} delete Ok response: {:?}", &elem, r),
@@ -344,7 +344,7 @@ pub async fn delete_elements(client: Client, namespace: &str) ->
     /*let ingress_name = ingress.name.clone();
     let configmap_name = format!("ingress-php-fpm-{}", ingress_name);*/
     let api: Api<Ingress> = Api::namespaced(client.clone(), namespace);
-    match api.delete("ingress", &delete_params).await {
+    match api.delete(INGRESS_NAME, &delete_params).await {
     //match api.delete(ingress_name.clone(), &delete_params).await {
         //Ok(r)  => info!("{} delete Ok response: {:?}", ingress_name, r),
         Ok(r)  => info!("ingress delete Ok response: {:?}", r),
@@ -356,7 +356,7 @@ pub async fn delete_elements(client: Client, namespace: &str) ->
     // Delete ingress  configmap
     let api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
     //match api.delete(&configmap_name, &delete_params).await {
-    match api.delete("ingress-php-fpm-ingress", &delete_params).await {
+    match api.delete(CONFIGMAP_NAME, &delete_params).await {
         //Ok(r)  => info!("{} delete Ok response: {:?}", configmap_name, r),
         Ok(r)  => info!("configmap delete Ok response: {:?}", r),
         Err(e) => {
