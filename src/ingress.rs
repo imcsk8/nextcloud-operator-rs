@@ -33,6 +33,16 @@ pub trait NextcloudIngress {
 impl NextcloudIngress for NextcloudElement {
     /// Create an ingress object configured to serve the FastCGI protocol
     async fn create_ingress(&self, client: Client) -> Result<(), Error> {
+        let ingresses: Api<Ingress> = Api::namespaced(client.clone(), self.namespace.as_ref());
+				// Check if ingress already exists
+				if let Some(i) = ingresses.get_opt(self.name.as_str()).await? {
+						info!("Ingress Already exists");
+						return Ok(())
+				}
+        let nginx_server_config = fs::read_to_string(&NEXTCLOUD_NGINX_SERVER_CONFIG)
+            .expect("Error reading nextcloud ingress configuration");
+				//let nginx_server_config = "gzip on; #CACA".to_string();
+
         // Create the ConfigMap object
         let config_map = ConfigMap {
             metadata: ObjectMeta {
@@ -95,6 +105,11 @@ impl NextcloudIngress for NextcloudElement {
                         "nginx.ingress.kubernetes.io/fastcgi-params-configmap".to_owned(),
                         CONFIGMAP_NAME.to_string(),
                     ),
+
+                    (
+                        "nginx.ingress.kubernetes.io/server-snippet".to_owned(),
+                        nginx_server_config.clone()
+                    ),
                 ])),
                 ..Default::default()
             },
@@ -121,7 +136,6 @@ impl NextcloudIngress for NextcloudElement {
         // Create the Ingress object
         // NOTE: the ingress controller has to be enabled: minikube addons enable ingress
         // https://kubernetes.github.io/ingress-nginx/deploy/
-        let ingresses: Api<Ingress> = Api::namespaced(client.clone(), self.namespace.as_ref());
         let patch_params = PatchParams::apply(FIELD_MANAGER);
         info!("Ingress::Creating or Updating");
         ingresses.patch(
